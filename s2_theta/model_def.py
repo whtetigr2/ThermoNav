@@ -16,7 +16,8 @@ def build_mask():
     undirected edges (i<j) with nonzero engineered coupling.
     """
     import sys, os
-    sys.path.insert(0, os.path.expanduser('~/workspace/flynav-redteam/thermopilot'))
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(_repo, 'thermopilot'))
     from harness import S2Agent
     a = S2Agent(n_sweeps=10, seed=0)
     J = a.J

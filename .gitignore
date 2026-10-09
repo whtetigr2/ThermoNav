@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/ venv/
+
+# Data / outputs (regenerable or corpus-grade, not source)
+*.log
+flight_logs.json
+*_sweep.csv
+TELEMETRY/
+head_to_head/
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp

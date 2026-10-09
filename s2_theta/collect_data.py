@@ -8,17 +8,17 @@ Saves incrementally per room.
 import sys, os
 import numpy as np
 
-SYSROOT = os.path.expanduser('~/workspace/flynav-redteam')
-sys.path.insert(0, os.path.join(SYSROOT, 'thermopilot'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone', 'dynamics_sim'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone'))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'sim'))
+sys.path.insert(0, REPO_ROOT)
 
 from harness import S2Agent, noisy_perception_with_counts, MOVES_6
 from model_def import N, K, T
 
 TRAIN_ROOMS = ['indoorcd_071', 'indoorcd_004', 'indoorcd_131']
 HELD_ROOMS = ['indoorcd_185', 'indoorcd_128']
-REAL_DIR = os.path.join(SYSROOT, 'slow-drone', 'real_lidar')
+REAL_DIR = os.path.join(REPO_ROOT, 'rooms')
 
 
 def compute_h_dyn(agent, pos, goal, p_occ, forbidden_moves=None, obs_count=None):

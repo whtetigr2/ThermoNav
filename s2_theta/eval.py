@@ -2,8 +2,8 @@
 import sys, os
 import numpy as np
 
-SYSROOT = os.path.expanduser('~/workspace/flynav-redteam')
-sys.path.insert(0, os.path.join(SYSROOT, 'thermopilot'))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
 sys.path.insert(0, '.')
 
 from harness import S2Agent, MOVES_6
@@ -40,7 +40,7 @@ def teacher_noise_ceiling(held_h_dyn, held_act, n_sweeps=200):
     """Teacher vs teacher (different seeds): the sampling-noise ceiling."""
     from gibbs_ising import gibbs_ising
     import sys
-    sys.path.insert(0, os.path.expanduser('~/workspace/flynav-redteam/thermopilot'))
+    sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
     from harness import S2Agent
     eng = S2Agent(n_sweeps=n_sweeps, seed=0)
     n = len(held_act)

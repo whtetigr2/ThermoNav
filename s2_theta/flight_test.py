@@ -2,10 +2,10 @@
 import sys, os
 import numpy as np
 
-SYSROOT = os.path.expanduser('~/workspace/flynav-redteam')
-sys.path.insert(0, os.path.join(SYSROOT, 'thermopilot'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone', 'dynamics_sim'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone'))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'sim'))
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import learned BEFORE patching harness.S2Agent (see s2_learned note).
@@ -24,7 +24,7 @@ harness.S2Agent = PatchedLearned
 import mission_dynamics_v5 as md
 from curated_v2 import GRADED
 
-REAL_DIR = os.path.join(SYSROOT, 'slow-drone', 'real_lidar')
+REAL_DIR = os.path.join(REPO_ROOT, 'rooms')
 
 
 def main():

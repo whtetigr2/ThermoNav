@@ -1,0 +1,16 @@
+S2-THETA v2 — trained kernel parameter summary
+File: kernel/s2_theta_v2.npz  |  123 params, 492 bytes
+Claim: Z1-legal formulation, validated in simulation
+
+Keys: biases, weights, edges, h_eng, w_eng, losses
+biases: shape (18,), range [-5.350, -4.634], max|h|=5.350
+weights: shape (105,), range [-1.138, 0.012], max|J|=1.138
+edges: 105 (i,j) pairs -> 105 couplings (symmetric)
+
+Temporal coupling check (the round-1/round-2 diagnostic):
+  one-hot J (t0 action block): -0.715  [teacher: -1.000]
+  cross-timestep J (t0-t1, t1-t2): sign NEGATIVE = correct (matches teacher)
+
+How to use: from kernel.s2_learned import LearnedS2Agent
+  agent = LearnedS2Agent()   # loads this file by default
+  agent.act(pos, goal, p_occ) -> next waypoint (same interface as S2Agent)

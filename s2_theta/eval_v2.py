@@ -7,8 +7,8 @@ If round 2 flips the sign, it was data. If not, it's architecture.
 import sys, os
 import numpy as np
 
-SYSROOT = os.path.expanduser('~/workspace/flynav-redteam')
-sys.path.insert(0, os.path.join(SYSROOT, 'thermopilot'))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
 sys.path.insert(0, '.')
 
 from harness import S2Agent
