@@ -27,8 +27,8 @@ Every number [measured in simulation, THRML backend].
 """
 import os, sys, time, json
 
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone")
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone/dynamics_sim")
+_SIMDIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _SIMDIR)
 
 import numpy as np
 import jax

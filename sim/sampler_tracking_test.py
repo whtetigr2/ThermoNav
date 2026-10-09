@@ -38,8 +38,8 @@ disabled via XLA_PYTHON_CLIENT_PREALLOCATE=false (set by the caller).
 """
 import os, sys, time, json
 
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone")
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone/drift_decomp")
+_SIMDIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _SIMDIR)
 
 import numpy as np
 
@@ -51,8 +51,8 @@ import sensor
 import head_to_head_thrml as hth
 
 # ---------------------------------------------------------------- config
-SLOWDRONE = "/home/hatch/workspace/flynav-redteam/slow-drone"
-OUTDIR = os.path.join(SLOWDRONE, "dynamics_sim")
+SLOWDRONE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
+OUTDIR = os.path.join(SLOWDRONE, "sim")
 
 ROOMS = ["indoorcd_128", "indoorcd_004", "indoorcd_053"]
 PREFERRED_START = {
@@ -74,7 +74,7 @@ rng_global = np.random.default_rng(7)
 
 # ---------------------------------------------------------------- helpers
 def load_occ(room):
-    return np.load(os.path.join(SLOWDRONE, "real_lidar", f"{room}_occ.npy"))
+    return np.load(os.path.join(SLOWDRONE, "rooms", f"{room}_occ.npy"))
 
 
 def voxel_free(occ, pose):

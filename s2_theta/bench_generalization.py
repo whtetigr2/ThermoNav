@@ -6,14 +6,14 @@ for the same (room, seed) regardless of agent.
 """
 import sys, os, csv, time, argparse
 
-SYSROOT = os.path.expanduser('~/workspace/flynav-redteam')
-S2T = os.path.join(SYSROOT, 'slow-drone', 's2_theta')
-sys.path.insert(0, os.path.join(SYSROOT, 'thermopilot'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone', 'dynamics_sim'))
-sys.path.insert(0, os.path.join(SYSROOT, 'slow-drone'))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+S2T = os.path.join(REPO_ROOT, 's2_theta')
+sys.path.insert(0, os.path.join(REPO_ROOT, 'thermopilot'))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'sim'))
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, S2T)
 
-REAL_DIR = os.path.join(SYSROOT, 'slow-drone', 'real_lidar')
+REAL_DIR = os.path.join(REPO_ROOT, 'rooms')
 FIELDS = ['agent', 'room', 'seed', 'noise', 'outcome', 'collision',
           'n_steps', 'path_efficiency', 'n_d5_refusals_s16', 'n_move_refusals',
           'wall_s', 'mission_id']

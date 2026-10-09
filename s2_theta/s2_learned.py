@@ -1,6 +1,6 @@
 """Drop-in S2 with learned (h_static, J). Same act() interface as S2Agent.
 
-Loads s2_theta.npz (biases=learned h_static (18,), weights=learned J on mask).
+Loads s2_theta_v2.npz by default (biases=learned h_static (18,), weights=learned J on mask).
 The dynamic h_dyn (ray costs, forbidden penalties) is computed identically
 to S2Agent.act(); only the static (h, J) are learned.
 
@@ -11,7 +11,8 @@ import os
 import sys
 import numpy as np
 
-sys.path.insert(0, os.path.expanduser('~/workspace/flynav-redteam/thermopilot'))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_REPO_ROOT, 'thermopilot'))
 from harness import S2Agent as _OrigS2Agent, MOVES_6
 from gibbs_ising import gibbs_ising
 
@@ -25,7 +26,7 @@ class LearnedS2Agent(_OrigS2Agent):
         # Init engineered template for moves/constants/_ray_cost, but we
         # override h_static and J below. Pop param_file from kw.
         super().__init__(**kw)
-        pf = param_file or os.path.join(_HERE, 's2_theta.npz')
+        pf = param_file or os.path.join(_HERE, 's2_theta_v2.npz')
         z = np.load(pf)
         self.h_static = z['biases'].astype(float)
         edges = z['edges']

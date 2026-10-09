@@ -43,8 +43,8 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false set by the caller.
 """
 import os, sys, time, json
 
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone")
-sys.path.insert(0, "/home/hatch/workspace/flynav-redteam/slow-drone/dynamics_sim")
+_SIMDIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _SIMDIR)
 
 import numpy as np
 
@@ -55,8 +55,8 @@ from thrml import SamplingSchedule
 import obscurant
 import head_to_head_thrml as hth
 
-SLOWDRONE = "/home/hatch/workspace/flynav-redteam/slow-drone"
-OUTDIR = os.path.join(SLOWDRONE, "dynamics_sim")
+SLOWDRONE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
+OUTDIR = os.path.join(SLOWDRONE, "sim")
 
 ROOMS_JUMP = ["indoorcd_128", "indoorcd_004", "indoorcd_053"]
 ROOMS_SLAM = ["indoorcd_128", "indoorcd_004"]
@@ -79,7 +79,7 @@ JUMP_K = 4
 
 
 def load_occ(room):
-    return np.load(os.path.join(SLOWDRONE, "real_lidar", f"{room}_occ.npy"))
+    return np.load(os.path.join(SLOWDRONE, "rooms", f"{room}_occ.npy"))
 
 
 def voxel_free(occ, pose):
