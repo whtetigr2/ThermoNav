@@ -45,11 +45,26 @@ cd s2_theta && python bench_generalization.py --agent learned   # 12 novel rooms
 
 ## The honest section
 
-- The kernel **matches** its engineered teacher; it does not exceed it. Imitation has a ceiling — the next frontier is reward-driven training, not better demonstrations. (One measured gap: heavy-fog 96-flight stress test, teacher 13/16 vs learned 11/13 — both fail safe.)
+- The kernel **matches** its engineered teacher; it does not exceed it. Imitation has a ceiling — and reward-driven training has now been tried twice and ruled out (see below). The next frontier is architecture, not training. (One measured gap: heavy-fog 96-flight stress test, teacher 13/16 vs learned 11/13 — both fail safe.)
 - Single-decision agreement with the teacher is only 42.8%, yet closed-loop flight is identical: disagreements live in low-stakes states. Closed-loop behavior is the load-bearing metric.
 - Validated in clear air (noise 0.15, HM3D indoor). Whiteout/fog is sensor-limited — the honest answer there is multi-modal sensing (radar), not more training.
 - `max|h| = 5.35` sits close to the assumed Z1 rail of 6.0 — flagged for hardware watch.
 - We publish our negatives: the full red-team record (killed lines, measured envelopes, known boundaries) is in [`REDTEAM.md`](REDTEAM.md).
+- **The stack is blind to walking-speed movers.** A person-scale mover paints one map voxel per scan and moves on; free-space carving (−3.40 log-odds from multi-ray carving vs +0.60 single hits) means the evidence never accumulates. 43/48 collisions in testing, D5 never vetoed a mover. Needs a motion-detection layer — architectural, not a training problem.
+- **The stack assumes pose is known.** Drift testing shows first collisions at 0.05 m/s drift (~1 m accumulated); a state estimator holding <0.5 m/mission is required. Unaided MEMS IMU cannot do this.
+
+## What we tried after v2 (October 2026)
+
+**Reward training: two clean negatives, both red-teamed.** REINFORCE on the kernel, one variable at a time:
+- 100 episodes, coarse per-mission reward → tied the bar (11/13 heavy-fog pairs). Negative.
+- 1,000 episodes → same tie. θ moved 3.6× more, margins tripled — the learning happened, the capability didn't. Sampling/time ruled out.
+- 100 episodes, dense per-decision rewards (margin-weighted teacher agreement + D5-veto penalty + potential-based shaping) → θ moved 5.5× more than the coarse run, teacher agreement 0.22→0.33, margins tripled. Still 11/13. Credit assignment ruled out.
+- Oracle certification of the 1,000-episode kernel: **FLAGGED** — 18% of states distributionally drifted, argmax changed on 49%. The bar's "wash" hid real churn underneath.
+- Verdict: the kernel is at its architectural ceiling. v2 stays shipped.
+
+**Teacher audit: clean.** The learned kernel subclasses the teacher — same inputs, same sampler, same fog. The student's hypothesis class even contains the teacher's exact parameters. The 11/13 gap is genuine, not a test leak.
+
+**Fog grounding:** our "heavy fog" ≈ 50 m visibility (modeled, not measured) — roughly 16× below the FAA waiver floor of 800 m. We test harder than anything that legally flies.
 
 ## License
 
