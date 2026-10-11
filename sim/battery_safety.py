@@ -58,19 +58,20 @@ BATTERY_MODEL.md):
   * Interface: the nav-trust signal is a single boolean with the
     semantics of the nav-health monitor's `pose_trustworthy`
     property — True ONLY when nav-health is HEALTHY (documented in
-    nav_health.py / NAV_HEALTH.md on branch
-    muse/roadmap-navhealth-2026-10-11: HEALTHY / DEGRADED /
-    UNTRUSTED, gate open only on HEALTHY). That monitor is being
-    fixed in parallel and does NOT exist in this branch, so the
-    mission loop takes the signal through an explicit stub slot:
-    cfg["nav_trustworthy"] may be a bool or a callable
-    (t_s, pose) -> bool with exactly those semantics. If the slot
-    is absent the stub returns False (the shipped status quo in
-    this branch: pose_trustworthy is hardcoded False), so no
-    in-flight checkpoint is ever recorded and RTC == RTB. The stub
-    is explicit and named `nav_trustworthy_stub` in
-    mission_dynamics_v5.py — it is an interface placeholder, not a
-    health estimate.
+    nav_health.py / NAV_HEALTH.md: HEALTHY / DEGRADED / UNTRUSTED,
+    gate open only on HEALTHY). GRADUATION UPDATE (2026-10-11): the
+    real NavHealthMonitor now lives in this repo (sim/nav_health.py)
+    and the mission loop feeds the checkpoint from it BY DEFAULT —
+    resolve_nav_trustworthy() in mission_dynamics_v5.py returns
+    monitor.pose_trustworthy, read after the monitor's 1 Hz update
+    for the step. The explicit slot survives as a scripted scenario
+    override only: cfg["nav_trustworthy"] may be a bool or a
+    callable (t_s, pose) -> bool with exactly those semantics, and
+    when a scenario supplies it, it wins (deterministic RTC
+    constructions cut trust at an exact time — see
+    nav_trustworthy_stub). With neither a monitor nor an override
+    the signal is False, so no in-flight checkpoint is recorded and
+    RTC == RTB.
 
 AFFORDABILITY (measured meter, not model):
   energy-to-target, in soc units =

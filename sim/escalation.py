@@ -32,6 +32,20 @@ when that layer is on it owns the battery decision and the mission
 loop calls this policy WITHOUT battery inputs. Nav-health remains
 MISSING. See sim/BATTERY_MODEL.md.
 
+NAV-HEALTH UPDATE (2026-10-11, roadmap Phase 1 item 3, graduated after
+red-team round 5 PASS WITH CAVEATS, documentation-only): the
+nav-health slot is now MODELED by nav_health.py (host-side classical
+monitor: HEALTHY / DEGRADED / UNTRUSTED from estimator self-reports
+only). When evaluate() is called with a nav_health state, the RTH
+gate becomes pose_trustworthy AND (nav_health == HEALTHY),
+"nav_health" leaves the MISSING list, and UNTRUSTED is itself a
+trigger (HOVER immediately; RTH-desired after NAV_UNTRUSTED_RTH_S
+sustained, which the closed gate then converts to land-in-place).
+Calls without a nav_health input keep the stub behavior exactly
+(backwards compatible). See sim/NAV_HEALTH.md — including its §2/§6
+caveats and the disclosed C2 burst-harvest residual, which is an
+accepted limit, not a defect to re-open.
+
 RTH CAVEAT (documented, not silent): the industry RTH assumes a known home,
 a navigable path, and working navigation. Our estimator is an open problem
 (scan-matching LEGO killed, red-team pass) and our fog is 16x below the FAA
@@ -67,6 +81,11 @@ from battery import RESERVE_SOC, WARN_SOC, CRITICAL_SOC
 # fraction: a high-draw phase can eat the reserve band faster than the
 # fraction alone suggests at low draw.
 BATT_TTR_WARN_S = 300.0  # s [design]
+
+# Nav-health trigger (roadmap Phase 1 item 3, 2026-10-11): sustained
+# UNTRUSTED nav-health reaches the RTH row on the same clock as sustained
+# perception degradation.
+NAV_UNTRUSTED_RTH_S = 30.0  # [design: mirrors DEGRADE_SUSTAIN_RTH_S]
 
 # ---------------------------------------------------------------------------
 # Thresholds. Every number carries provenance:
@@ -231,6 +250,10 @@ class EscalationPolicy:
         # Battery warning latch: warn once per flight, not per step.
         self._batt_warned = False
         self._batt_modeled = False
+        # Nav-health: sustained-UNTRUSTED timer + modeled flag
+        # (graduated 2026-10-11; see NAV-HEALTH UPDATE in the docstring).
+        self._nav_untrusted_timer = 0.0
+        self._nav_modeled = False
         # MISSING trigger slots (unmodeled in sim)
         self.missing_triggers = {
             "battery": TriggerStub(
@@ -345,7 +368,7 @@ class EscalationPolicy:
     def evaluate(self, vis, far, map_age, jitter, dt,
                  pose_trustworthy=False, operator_override=False, t=0.0,
                  landed=False, link_report=None,
-                 battery_soc=None, battery_ttr_s=None):
+                 battery_soc=None, battery_ttr_s=None, nav_health=None):
         """One policy step. Returns (action, info dict).
 
         pose_trustworthy: RTH gate. False until an estimator clears the
@@ -372,19 +395,41 @@ class EscalationPolicy:
         battery_soc / battery_ttr_s: from battery.BatteryModel (host
             model, simulation only). None = no battery input; the policy
             then behaves exactly as the pre-graduation build.
+        nav_health: None (default) = legacy behavior, nav_health stays
+            a MISSING stub. Otherwise one of
+            "HEALTHY"/"DEGRADED"/"UNTRUSTED" from
+            nav_health.NavHealthMonitor: the RTH gate becomes
+            pose_trustworthy AND (nav_health == HEALTHY), the
+            nav_health stub is retired, and UNTRUSTED is itself a
+            trigger — HOVER immediately, RTH-desired after
+            NAV_UNTRUSTED_RTH_S sustained [design: mirrors the 30 s
+            degradation row] (which the closed gate then converts to
+            land-in-place).
         """
         # Missing slots are evaluated (always inactive) so the table is
         # complete and auditable. Once a link report is supplied the link
         # slot is modeled, not missing; same for battery inputs.
         self._link_modeled = link_report is not None
         self._batt_modeled = battery_soc is not None
+        self._nav_modeled = nav_health is not None
         for name, stub in self.missing_triggers.items():
             if name == "link" and self._link_modeled:
                 continue
             if name == "battery" and self._batt_modeled:
                 continue
+            if name == "nav_health" and self._nav_modeled:
+                continue
             fired, _ = stub.evaluate()
             assert not fired
+        if nav_health is not None:
+            assert nav_health in ("HEALTHY", "DEGRADED", "UNTRUSTED"), \
+                nav_health
+            pose_trustworthy = bool(pose_trustworthy) and \
+                nav_health == "HEALTHY"
+            if nav_health == "UNTRUSTED":
+                self._nav_untrusted_timer += dt
+            else:
+                self._nav_untrusted_timer = 0.0
 
         # Battery warning latch: the warn band is a host notification
         # level (warning is not a flight action), logged once when
@@ -442,6 +487,21 @@ class EscalationPolicy:
         desired, reason, immediate, link_sev = self._table_action(
             vis, far, map_age, jitter, link_state=link_state,
             battery_soc=battery_soc, battery_ttr_s=battery_ttr_s)
+
+        # Nav-health trigger rows (only when wired): UNTRUSTED pose is
+        # a stand-down trigger on its own, independent of perception.
+        # Most-severe-wins against the table above — it can raise the
+        # desire to HOVER / RTH but never lowers a battery-critical
+        # LAND (immediate) or any severer table desire.
+        if nav_health == "UNTRUSTED":
+            if self._nav_untrusted_timer >= NAV_UNTRUSTED_RTH_S:
+                nav_desired, nav_reason = RTH, \
+                    "nav UNTRUSTED sustained 30 s [design]"
+            else:
+                nav_desired, nav_reason = HOVER, \
+                    "nav UNTRUSTED [measured signature]"
+            if nav_desired > desired:
+                desired, reason = nav_desired, nav_reason
 
         # Industry rule 1: hold-first. Hover IS the hold: continue->hover
         # engages immediately (the shipped FIX 3 / FIX 4 behavior is not
@@ -635,19 +695,22 @@ class EscalationPolicy:
             link_modeled=self._link_modeled, link_state=link_state,
             battery_soc=battery_soc, battery_ttr_s=battery_ttr_s,
             battery_trigger=batt_trig,
-            batt_modeled=self._batt_modeled)
+            batt_modeled=self._batt_modeled,
+            nav_health=nav_health, nav_modeled=self._nav_modeled)
 
     @staticmethod
     def _info(reason, gated, holding=False, overridden=False,
               disarmed=False, commit_held=False, link_modeled=False,
               link_state=None, battery_soc=None, battery_ttr_s=None,
-              battery_trigger=None, batt_modeled=False):
+              battery_trigger=None, batt_modeled=False,
+              nav_health=None, nav_modeled=False):
         missing = []
         if not batt_modeled:
             missing.append("battery")
         if not link_modeled:
             missing.append("link")
-        missing.append("nav_health")
+        if not nav_modeled:
+            missing.append("nav_health")
         return {"reason": reason, "rth_gated": gated,
                 "holding_for_override": holding,
                 "operator_overridden": overridden,
@@ -658,7 +721,8 @@ class EscalationPolicy:
                 "link_state": link_state,
                 "battery_soc": battery_soc,
                 "battery_ttr_s": battery_ttr_s,
-                "battery_trigger": battery_trigger}
+                "battery_trigger": battery_trigger,
+                "nav_health": nav_health}
 
     # -- behavior primitives (integration contract) -------------------------
     # These are called from the mission loop AFTER the Phase 2 rebase.

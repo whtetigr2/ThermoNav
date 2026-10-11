@@ -21,7 +21,12 @@
 > on this code (see README/REDTEAM updates). The checkpoint's
 > nav-trust input remains the EXPLICIT stub (`nav_trustworthy_stub`):
 > the real NavHealthMonitor graduates separately, and wiring it in
-> place of the stub is a recorded follow-up. ThermoNav-side validation
+> place of the stub is a recorded follow-up. **Superseded
+> 2026-10-11:** that follow-up is done — the nav-health graduation
+> made the real NavHealthMonitor the checkpoint's default trust
+> path (`resolve_nav_trustworthy` in `mission_dynamics_v5.py`);
+> the stub survives only as a scripted scenario override. See
+> `NAV_HEALTH.md`. ThermoNav-side validation
 > results are recorded at the end of the safety-layer validation
 > section below.
 

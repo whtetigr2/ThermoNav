@@ -60,6 +60,7 @@ import s16 as s16_module
 import escalation as esc_mod
 import battery as batt_mod
 import battery_safety as bsafe_mod
+import nav_health as nh_mod
 
 from vehicle_v3 import (Phase3Vehicle, V_MAX, DT, A_MAX_OLD, envelope,
                         TW_PRIMARY, TAU_TILT)
@@ -89,28 +90,56 @@ _FIX3 = False         # low-vis executive (hover)
 _BATTERY = None       # per-run BatteryModel (battery layer, graduated
                       # 2026-10-11)
 _SAFETY = None        # per-run BatterySafetyController (Paul's design)
+_NAVHEALTH = None     # per-run NavHealthMonitor (nav-health layer,
+                      # graduated 2026-10-11)
 INNER_PER_SUBSTEP = 10          # 100 Hz dynamics, 10 Hz decisions
 TRAJ_RECORD_EVERY = 5           # 20 Hz demo feed (contract dt=0.05)
 
 
 def nav_trustworthy_stub(cfg, t, pose):
-    """EXPLICIT STUB for the nav-health trust signal (see
-    battery_safety.py CHECKPOINT SPEC). The nav-health monitor
-    defines the signal as `pose_trustworthy` — True only when
-    nav-health is HEALTHY — but that monitor has NOT graduated to
-    ThermoNav yet (it graduates separately; wiring it in place of
-    this stub is a recorded follow-up). This slot takes
+    """EXPLICIT scripted override for the nav-health trust signal
+    (see battery_safety.py CHECKPOINT SPEC). Kept after the
+    nav-health graduation (2026-10-11) for ONE reason: deterministic
+    scenario construction. The battery safety validation's RTC
+    scenarios are red-team constructions that cut trust at an exact
+    time so the checkpoint freezes at a known pose; a live monitor's
+    state cannot be scripted to the second, so those scenarios feed
+    the checkpoint through this slot instead. It takes
     cfg["nav_trustworthy"]: a bool, or a callable (t_s, pose) ->
-    bool with exactly those semantics. Absent the slot it returns
-    False — the shipped status quo (pose_trustworthy hardcoded
-    False) — so no in-flight checkpoint is recorded and RTC
-    coincides with RTB. This is an interface placeholder, NOT a
-    health estimate."""
+    bool with exactly the monitor's semantics (True only when
+    nav-health is HEALTHY). This is a scenario lever, NOT a health
+    estimate, and it is NOT the default path: when the slot is
+    absent, the battery checkpoint is fed by the real
+    NavHealthMonitor (see resolve_nav_trustworthy)."""
     src = (cfg or {}).get("nav_trustworthy")
     if callable(src):
         return bool(src(float(t), tuple(float(c) for c in pose)))
     if src is not None:
         return bool(src)
+    return False
+
+
+def resolve_nav_trustworthy(cfg, monitor, t, pose):
+    """The battery checkpoint's trust input (graduated 2026-10-11).
+
+    Default path — the REAL monitor: when a NavHealthMonitor is
+    active for this run, the checkpoint is fed
+    monitor.pose_trustworthy (True iff state == HEALTHY), read after
+    the monitor's update for this step. A monitor is active when
+    cfg["nav_health"] is set, or when the battery safety layer is on
+    and no scripted override was supplied (so a plain battery-safety
+    flight gets the real monitor, not the old hardcoded-False stub).
+
+    Fallback — the scripted override: if cfg carries an explicit
+    cfg["nav_trustworthy"] slot it wins (deterministic scenario
+    construction; see nav_trustworthy_stub). With neither a monitor
+    nor an override, returns False — the pre-graduation status quo:
+    no in-flight checkpoint is recorded and RTC coincides with RTB.
+    """
+    if monitor is not None:
+        return bool(monitor.pose_trustworthy)
+    if (cfg or {}).get("nav_trustworthy") is not None:
+        return nav_trustworthy_stub(cfg, t, pose)
     return False
 
 
@@ -533,7 +562,7 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
 
     # ---- Phase 3 per-run physics config ----
     global A_BRAKE, A_PLAN, FILTER_TAU, _TRACKER, _FIX1, _FIX2, _FIX3, _FIX4
-    global _ESCALATION, _BATTERY, _SAFETY
+    global _ESCALATION, _BATTERY, _SAFETY, _NAVHEALTH
     cfg = dict(cfg or {})
     _FIX1 = bool(cfg.get("fix_atten_d5", False))
     _FIX2 = bool(cfg.get("fix_confirm", False))
@@ -567,6 +596,25 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     _SAFETY = None  # created after pick_start_goal (needs base pose)
     if cfg.get("battery_safety") and _BATTERY is None:
         raise ValueError("battery_safety requires cfg['battery']")
+    # Nav-health layer (roadmap Phase 1 item 3, graduated 2026-10-11
+    # after red-team round 5 PASS WITH CAVEATS): monitor consuming a
+    # SIMULATED estimator report stream (see the report builder at the
+    # battery/escalation call site). On when cfg["nav_health"] is set;
+    # ALSO on by default when the battery safety layer is on and no
+    # scripted cfg["nav_trustworthy"] override was supplied — the
+    # checkpoint's default trust path is the real monitor, not the
+    # stub (see resolve_nav_trustworthy).
+    _NAVHEALTH = nh_mod.NavHealthMonitor() if (
+        cfg.get("nav_health")
+        or (cfg.get("battery_safety")
+            and cfg.get("nav_trustworthy") is None)) else None
+    _nh_prev_pose = None        # last outer-step pose (report generator)
+    _nh_rng = np.random.default_rng(9000 + seed)
+    _issued_cmd = [0.0]  # norm of the velocity setpoint last ISSUED to
+    # the PID (post-supervision: braking/hover issue 0, land issues the
+    # descent rate). This — not the pre-supervision cruise setpoint and
+    # never achieved velocity — is the monitor's cmd channel (research
+    # repo round-1 F3 fix: v_cmd_filt false-fired on CBF-braked steps).
     _grav = bool(cfg.get("gravity_envelope", False))
     _tw = float(cfg.get("tw_ratio", TW_PRIMARY))
     if _grav:
@@ -591,6 +639,11 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     _return_target = None           # active RTB/RTC target pose, if any
     vehicle = Phase3Vehicle(pos=start_pose, cfg=cfg, seed=seed)
     pid = CascadedPID()  # tuned gains are the defaults
+
+    def _pid_issue(p_des, v_des):
+        _issued_cmd[0] = float(np.linalg.norm(
+            np.asarray(v_des, dtype=float)))
+        return pid.command(p_des, v_des, vehicle.pos, vehicle.vel)
     logodds = np.zeros(shape)
     obs_count = np.zeros(shape, dtype=np.int32)
 
@@ -689,6 +742,58 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
         if _TRACKER is not None:
             _TRACKER.update_stale(map_age, fix4=_FIX4)
 
+        # ---- Nav-health report (SIMULATED estimator, sensor-model side) --
+        # Ported from the research repo (graduated 2026-10-11). The
+        # report generator plays the role of the estimator hardware:
+        # nominal mode reports the flown displacement + noise (sigma
+        # 0.03 m, the FAST-LIO2 eval's Mid-360-class noise). The
+        # MONITOR (decision side) only ever sees the report dict; it
+        # never reads vehicle truth. cfg["nav_health_freeze_from_step"]=k
+        # scripts the measured whiteout failure from step k: reported
+        # motion collapses to 12.5% of actual (broaden eval [measured]).
+        _nh_state = None
+        if _NAVHEALTH is not None:
+            _pose_now = np.asarray(vehicle.pos, dtype=float)
+            if _nh_prev_pose is None:
+                _true_disp = 0.0
+            else:
+                _true_disp = float(np.linalg.norm(_pose_now - _nh_prev_pose))
+            _nh_prev_pose = _pose_now.copy()
+            _freeze_from = cfg.get("nav_health_freeze_from_step")
+            if _freeze_from is not None and step >= int(_freeze_from):
+                _est_disp = 0.125 * _true_disp
+            else:
+                _est_disp = max(0.0, _true_disp
+                                + float(_nh_rng.normal(0.0, 0.03)))
+            # cmd channel = the controller's SETPOINT, never achieved
+            # motion (research round 1, F3): the velocity setpoint last
+            # ISSUED to the PID during the previous outer step, recorded
+            # post-supervision by _pid_issue (cruise setpoint on servo
+            # steps, 0 on braking/hover steps, descent rate on land
+            # steps). One-step lag is realistic: it is the setpoint the
+            # estimator's last interval was flown under.
+            _cmd_speed = _issued_cmd[0]
+            _report = {
+                "cmd_speed_mps": _cmd_speed,
+                "est_speed_mps": _est_disp / 1.0,
+                "est_jump_m": _est_disp,
+                "n_features": int(sum(1 for _s in scans
+                                      if _s[3] and _s[4])),
+                "residual_m": None,   # MISSING in-loop: no scan matcher
+                "map_age_s": map_age,
+                "dt_s": 1.0,
+            }
+            _nh_state, _nh_info = _NAVHEALTH.update(_report, t=t_sim)
+            log.setdefault("nav_health_trace", []).append(
+                (step, _nh_state, _nh_info["reasons"]))
+            if _nh_state == nh_mod.UNTRUSTED:
+                log["nav_untrusted_scans"] = \
+                    log.get("nav_untrusted_scans", 0) + 1
+            elif _nh_state == nh_mod.DEGRADED:
+                log["nav_degraded_scans"] = \
+                    log.get("nav_degraded_scans", 0) + 1
+            log["nav_final_health"] = _nh_state
+
         # ---- Battery (graduated 2026-10-11) ----
         # Stepped once per outer step (dt=1.0 s) at the load implied by
         # the vehicle's CURRENT velocity — its own onboard state, no
@@ -719,9 +824,16 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
         _safety_action = bsafe_mod.NONE
         _land_terminal = False
         if _SAFETY is not None:
+            # Checkpoint trust (graduated 2026-10-11): the REAL
+            # NavHealthMonitor by default (read after this step's
+            # update, 1 Hz cadence — the consumer contract in
+            # nav_health.py); the scripted cfg["nav_trustworthy"]
+            # override only when a scenario supplies one. A checkpoint
+            # is recorded exactly while this reads True — the battery
+            # checkpoint semantics are unchanged.
             _SAFETY.observe(
                 t_sim, _BATTERY.soc, _BATTERY.wh_used, pose,
-                nav_trustworthy_stub(cfg, t_sim, pose))
+                resolve_nav_trustworthy(cfg, _NAVHEALTH, t_sim, pose))
             _safety_action, _sinfo = _SAFETY.step(
                 t_sim, _BATTERY.soc, pose)
             log["safety_rung"] = _sinfo.get("rung") or ""
@@ -738,12 +850,14 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                 _TRACKER.vis_smooth if _TRACKER is not None else 1.0,
                 _TRACKER.far_smooth if _TRACKER is not None else 1.0,
                 map_age, False, 1.0,
-                pose_trustworthy=False, t=t_sim,
+                pose_trustworthy=bool(cfg.get("pose_trustworthy", False)),
+                t=t_sim,
                 battery_soc=None if _SAFETY is not None else (
                     _batt_state["soc"] if _batt_state else None),
                 battery_ttr_s=None if _SAFETY is not None else (
                     _batt_state["time_to_reserve_s"]
-                    if _batt_state else None))
+                    if _batt_state else None),
+                nav_health=_nh_state)
             _esc_action = max(_esc_action, _a)
             if _a > (esc_mod.HOVER if hover_mode else esc_mod.CONTINUE):
                 log["esc_engaged_scans"] = log.get("esc_engaged_scans", 0) + 1
@@ -901,13 +1015,11 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                         # guard block's _land_rate: full rate when the
                         # descent is verified, creep rate in the
                         # final-approach band when it is not (RT-1).
-                        a_cmd = pid.command(
+                        a_cmd = _pid_issue(
                             vehicle.pos,
-                            (0, 0, -_land_rate),
-                            vehicle.pos, vehicle.vel)
+                            (0, 0, -_land_rate))
                     else:
-                        a_cmd = pid.command(vehicle.pos, (0, 0, 0),
-                                            vehicle.pos, vehicle.vel)
+                        a_cmd = _pid_issue(vehicle.pos, (0, 0, 0))
                     p_prev = vehicle.pos.copy()
                     vehicle.step(a_cmd)
                     t_sim += DT
@@ -1097,17 +1209,14 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             t_seg = 0.0
             for _ in range(INNER_PER_SUBSTEP):
                 if _braking:
-                    a_cmd = pid.command(vehicle.pos, (0, 0, 0),
-                                        vehicle.pos, vehicle.vel)
+                    a_cmd = _pid_issue(vehicle.pos, (0, 0, 0))
                 elif use_servo:
                     # Pure velocity servo: p_des = pos zeroes the outer P
                     # term; the inner PID tracks v_cmd directly.
-                    a_cmd = pid.command(vehicle.pos, v_cmd,
-                                        vehicle.pos, vehicle.vel)
+                    a_cmd = _pid_issue(vehicle.pos, v_cmd)
                 else:
                     p_des, v_des, _ = seg.eval(min(t_seg, seg.T))
-                    a_cmd = pid.command(p_des, v_des, vehicle.pos,
-                                        vehicle.vel)
+                    a_cmd = _pid_issue(p_des, v_des)
                 p_prev = vehicle.pos.copy()
                 vehicle.step(a_cmd)
                 t_seg += DT
@@ -1297,6 +1406,12 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
         f"{c:.2f}" for c in _SAFETY.tracker.checkpoint_pose) \
         if _SAFETY is not None else ""
     row["esc_batt_terminal_land"] = log.get("esc_batt_terminal_land", 0)
+    # ---- Nav-health layer (graduated 2026-10-11) ----
+    row["nav_enabled"] = int(_NAVHEALTH is not None)
+    row["nav_final_health"] = log.get("nav_final_health", "")
+    row["nav_untrusted_scans"] = log.get("nav_untrusted_scans", 0)
+    row["nav_degraded_scans"] = log.get("nav_degraded_scans", 0)
+    row["nav_freeze_from_step"] = cfg.get("nav_health_freeze_from_step", -1)
     # Full event + calibration records (consumed by the safety
     # validation runner; fixed-field CSV writers ignore extras, as
     # with the esc_*/batt_* fields above).
@@ -1313,7 +1428,9 @@ MANIFEST_FIELDS_V4 = MANIFEST_FIELDS_V3 + ["obsc_archetype", "obsc_density",
 MANIFEST_FIELDS_V5 = MANIFEST_FIELDS_V4 + ["fix_atten_d5", "fix_confirm",
     "fix_lowvis", "fix_stale", "n_hover_scans", "vis_min",
     "esc_enabled", "esc_final_action", "esc_engaged_scans", "esc_n_events",
-    "esc_rth_gated", "esc_land_vetoed"]
+    "esc_rth_gated", "esc_land_vetoed",
+    "nav_enabled", "nav_final_health", "nav_untrusted_scans",
+    "nav_degraded_scans", "nav_freeze_from_step"]
 
 
 def main():
