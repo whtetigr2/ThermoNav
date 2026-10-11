@@ -1,6 +1,7 @@
 """Drop-in S2 with learned (h_static, J). Same act() interface as S2Agent.
 
-Loads s2_theta_v2.npz by default (biases=learned h_static (18,), weights=learned J on mask).
+Loads s2_theta_v3.npz by default (biases=learned h_static (18,), weights=learned J on mask).
+s2_theta_v2.npz remains loadable via param_file for fallback/comparison.
 The dynamic h_dyn (ray costs, forbidden penalties) is computed identically
 to S2Agent.act(); only the static (h, J) are learned.
 
@@ -26,7 +27,7 @@ class LearnedS2Agent(_OrigS2Agent):
         # Init engineered template for moves/constants/_ray_cost, but we
         # override h_static and J below. Pop param_file from kw.
         super().__init__(**kw)
-        pf = param_file or os.path.join(_HERE, 's2_theta_v2.npz')
+        pf = param_file or os.path.join(_HERE, 's2_theta_v3.npz')
         z = np.load(pf)
         self.h_static = z['biases'].astype(float)
         edges = z['edges']

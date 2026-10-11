@@ -10,6 +10,6 @@ thermodynamic kernel plugs into.
   `z1_check`)
 - `gibbs_ising.py` — the Gibbs sampler used by the S2 decision kernel
 
-The trained kernel lives in `../s2_theta/` (`s2_theta_v2.npz`, 123 params,
-drop-in via `s2_learned.py`). Claim: Z1-legal formulation, validated in
+The trained kernel lives in `../s2_theta/` (`s2_theta_v3.npz`, 123 params,
+drop-in via `s2_learned.py`; v2 retained as fallback). Claim: Z1-legal formulation, validated in
 simulation — never silicon, never real aircraft.

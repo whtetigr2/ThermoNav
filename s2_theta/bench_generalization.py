@@ -32,7 +32,7 @@ def main():
     if args.agent == 'learned':
         from s2_learned import LearnedS2Agent
         import harness
-        pf = os.path.join(S2T, 's2_theta_v2.npz')
+        pf = os.path.join(S2T, 's2_theta_v3.npz')
 
         class PatchedLearnedV2(LearnedS2Agent):
             def __init__(self, **kw):

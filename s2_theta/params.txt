@@ -14,3 +14,26 @@ Temporal coupling check (the round-1/round-2 diagnostic):
 How to use: from kernel.s2_learned import LearnedS2Agent
   agent = LearnedS2Agent()   # loads this file by default
   agent.act(pos, goal, p_occ) -> next waypoint (same interface as S2Agent)
+
+---
+S2-THETA v3 — SHIPPED DEFAULT (2026-10-11)
+File: kernel/s2_theta_v3.npz  |  123 params
+Parent: s2_theta_v2.npz (MD5 aebdc75b831b2bd48a775faff615759e)
+Change: uniform t=0 bias shift +1.0 (vacancy hardening)
+MD5: e67aaed07c7492f1f2239deecfd1c6cb
+Claim: Z1-legal formulation, validated in simulation
+
+Keys: biases, weights, edges, h_eng, w_eng, losses (+ v3_parent_md5, v3_beta, v3_note)
+biases: shape (18,), range [-5.350, -3.690], max|h|=5.350
+weights: shape (105,), range [-1.138, 0.012], max|J|=1.138
+Z1 rails: max|h|=5.350 (<=6), max|J|=1.138 (<=6), degree=15 (<=16)
+
+Verification: 204/204 decision agreement vs v2 (exact enumeration);
+min t=0-vacancy margin -0.900 -> +1.100; exact gate ALL PASS.
+Win is fault tolerance, NOT better flight. Known tradeoffs:
+more decisive on marginal inputs (48/2586 near-tie flips, all v2-all-off->v3-one-hot);
+one-hot vs multi-hot margin thins 2.910 -> 0.910.
+
+How to use: from kernel.s2_learned import LearnedS2Agent
+  agent = LearnedS2Agent()   # loads v3 by default
+  agent = LearnedS2Agent(param_file='s2_theta/s2_theta_v2.npz')  # v2 fallback

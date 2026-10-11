@@ -209,8 +209,14 @@ baseline. (Agreement context: teacher self-agreement 51.4%, pure teacher 47.3%
 
 - `collect_traj_data.py` — trajectory rollouts → `s2_data_v2.npz`
 - `train_s2_theta_v2.py` — fully-visible training (manual KL grad, THRML sampler)
-- `s2_theta_v2.npz` — final learned params (warm-init, 123 params)
+- `s2_theta_v2.npz` — final learned params (warm-init, 123 params); retained as fallback/baseline
+- `s2_theta_v3.npz` — SHIPPED DEFAULT (2026-10-11): v2 + uniform t=0 field shift (+1.0)
+  for vacancy hardening. 204/204 decision agreement vs v2 (exact enumeration);
+  min t=0-vacancy margin -0.900 -> +1.100. MD5 e67aaed07c7492f1f2239deecfd1c6cb.
+  Win is fault tolerance, not better flight. Known tradeoffs (red-teamed):
+  more decisive on marginal inputs; one-hot margin thins 2.91 -> 0.91.
 - `s2_theta_v2_warm.npz`, `s2_theta_v2_random.npz` — per-init checkpoints
 - `eval_v2.py` — agreement + temporal diagnostic + Z1
-- `flight_test_v2.py` — closed-loop gate (uses `s2_learned.LearnedS2Agent`)
+- `flight_test_v2.py` — closed-loop gate for v2 baseline (uses `s2_learned.LearnedS2Agent`)
+- `flight_test_v3.py` — closed-loop gate for v3 SHIPPED DEFAULT
 - `S2_THETA.md` — this file (round-2 section appended)

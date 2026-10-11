@@ -1,7 +1,8 @@
 # s2_theta checkpoints — what each .npz is
 
-**Ships:** `s2_theta_v2.npz` — the trained 123-param kernel (18 biases + 105
-couplings). Default in `s2_learned.py`. Human-readable in `params.txt`.
+**Ships:** `s2_theta_v3.npz` — the trained 123-param kernel (18 biases + 105
+couplings), v2 + t=0 field shift (+1.0) for vacancy hardening. Default in `s2_learned.py`.
+`s2_theta_v2.npz` retained as fallback/baseline. Human-readable in `params.txt`.
 
 ## Training data
 

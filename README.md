@@ -17,7 +17,7 @@ ThermoNav's decision-maker is an 18-spin Ising model (6 directions × 3 steps of
 
 ## Layout
 
-- `s2_theta/` — the trained kernel: `s2_theta_v2.npz` (the 123 params), human-readable `params.txt`, training scripts (`train_s2_theta_v2.py`), drop-in agent (`s2_learned.py`, defaults to v2), evaluation + generalization benchmark (`eval_v2.py`, `bench_generalization.py`), training data (`s2_data*.npz`, manifest in `CHECKPOINTS.md`), and full docs (`S2_THETA.md`, `GENERALIZATION.md` — including the honest failure log).
+- `s2_theta/` — the trained kernel: `s2_theta_v3.npz` (the 123 params, shipped default — v2 + vacancy hardening), `s2_theta_v2.npz` retained as fallback/baseline, human-readable `params.txt`, training scripts (`train_s2_theta_v2.py`), drop-in agent (`s2_learned.py`, defaults to v3), evaluation + generalization benchmark (`eval_v2.py`, `bench_generalization.py`), training data (`s2_data*.npz`, manifest in `CHECKPOINTS.md`), and full docs (`S2_THETA.md`, `GENERALIZATION.md` — including the honest failure log).
 - `thermopilot/` — the navigation harness: `harness.py` (S2 teacher agent, A* planner, D5 safety veto), `ising.py` (Ising helpers), `gibbs_ising.py` (the sampler). See `thermopilot/README.md`.
 - `sim/` — the dynamics validation suite (point-mass physics, wind, obscurants, fix validation; Phases 1–4). Entry points in `sim/README.md`. Includes the escalation ladder: `escalation.py` (Option A industry-mirror policy, host-side classical), `escalation_decider.py` (12-spin Z1-legal decider kernel), `test_escalation.py` (128-combo oracle test), `docs/ESCALATION_BUILD.md`, wired into `mission_dynamics_v5.py` via per-step evaluation and `max(shipped, escalation)`.
 - `rooms/` — 30 HM3D indoor occupancy grids used for training and benchmarking.
@@ -31,7 +31,8 @@ import numpy as np, sys
 sys.path += ['s2_theta', 'thermopilot']
 from s2_learned import LearnedS2Agent
 
-agent = LearnedS2Agent(param_file='s2_theta/s2_theta_v2.npz')
+agent = LearnedS2Agent()  # loads s2_theta_v3.npz by default
+# agent = LearnedS2Agent(param_file='s2_theta/s2_theta_v2.npz')  # v2 fallback
 # agent.act(pos, goal, p_occ) -> next waypoint, same interface as the engineered S2
 ```
 
