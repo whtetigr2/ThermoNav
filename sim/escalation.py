@@ -20,6 +20,18 @@ link_report, the link rows below fire for real and "link" leaves the
 MISSING list. Calls without a link_report keep the old stub behavior
 exactly (backwards compatible). Battery / nav-health remain MISSING.
 
+BATTERY UPDATE (2026-10-11, roadmap Phase 1 item 1, graduated after
+red-team round 2 PASS WITH CAVEATS): the battery slot is now MODELED
+by battery.py (classical host model, simulation only, parameters
+calculated/ASSUMED as labeled there). When evaluate() is called with
+battery_soc / battery_ttr_s, the battery rows below fire for real and
+"battery" leaves the MISSING list. Calls without battery inputs keep
+the stub behavior exactly (backwards compatible). The full measured-
+countdown + RTB/RTC/land safety cascade lives in battery_safety.py;
+when that layer is on it owns the battery decision and the mission
+loop calls this policy WITHOUT battery inputs. Nav-health remains
+MISSING. See sim/BATTERY_MODEL.md.
+
 RTH CAVEAT (documented, not silent): the industry RTH assumes a known home,
 a navigable path, and working navigation. Our estimator is an open problem
 (scan-matching LEGO killed, red-team pass) and our fog is 16x below the FAA
@@ -48,6 +60,13 @@ implements the call site (numpy only here — no planner/s16 import).
 """
 
 import numpy as np
+
+from battery import RESERVE_SOC, WARN_SOC, CRITICAL_SOC
+
+# Battery warning also fires on time-to-reserve, not just charge
+# fraction: a high-draw phase can eat the reserve band faster than the
+# fraction alone suggests at low draw.
+BATT_TTR_WARN_S = 300.0  # s [design]
 
 # ---------------------------------------------------------------------------
 # Thresholds. Every number carries provenance:
@@ -145,6 +164,17 @@ LINK_EXPOSURE_COMMIT_S = 75.0  # [design: net LOST-exposure (LOST time
 
 # Land-in-place descent (Option A fallback when RTH gated)
 LAND_DESCENT_RATE = 0.5  # m/s [design]
+# Final-approach creep for NOT-fully-verified descents (battery RT-1):
+# when the column/guard state is unverified (unknown column, or the
+# floor layer has never produced scan evidence), the last
+# LAND_CREEP_ALT_M are flown at creep rate. Measured reason: floor
+# evidence arrives late (a zz=0-only obstacle was first hit by a scan
+# at pose z=1.05), and the hover PID's ~0.73 s settle sinks ~0.1 m
+# after a veto — at 0.5 m/s entry the veto fired and the vehicle
+# still sank into the patch. At creep entry speed the settle sink
+# is ~0.03 m and the guard gets ~3x the scans. [design]
+LAND_CREEP_RATE = 0.15   # m/s [design]
+LAND_CREEP_ALT_M = 2.5   # m above ground [design]
 
 # Touchdown confirmation threshold (mirrors land_in_place_behavior below).
 # DISARM may fire only when the vehicle reports at-or-below this altitude.
@@ -198,6 +228,9 @@ class EscalationPolicy:
         self._pending = None          # action waiting out the hold window
         self._pending_timer = 0.0
         self._current = CONTINUE
+        # Battery warning latch: warn once per flight, not per step.
+        self._batt_warned = False
+        self._batt_modeled = False
         # MISSING trigger slots (unmodeled in sim)
         self.missing_triggers = {
             "battery": TriggerStub(
@@ -220,11 +253,33 @@ class EscalationPolicy:
         return vis > VIS_CLEAR and far > FAR_CLEAR
 
     # -- policy table (Option A) --------------------------------------------
-    def _table_action(self, vis, far, map_age, jitter, link_state=None):
+    @staticmethod
+    def _battery_trigger(battery_soc, battery_ttr_s):
+        """Battery band from charge fraction (+ TTR for the warning).
+        Returns 'critical' / 'reserve' / 'warn' / 'none' / None (no
+        battery input supplied — pre-graduation callers)."""
+        if battery_soc is None:
+            return None
+        if battery_soc <= CRITICAL_SOC:
+            return "critical"
+        if battery_soc <= RESERVE_SOC:
+            return "reserve"
+        if battery_soc <= WARN_SOC or (
+                battery_ttr_s is not None
+                and battery_ttr_s <= BATT_TTR_WARN_S):
+            return "warn"
+        return "none"
+
+    def _table_action(self, vis, far, map_age, jitter, link_state=None,
+                      battery_soc=None, battery_ttr_s=None):
         """Desired severity from the Option A trigger table, ignoring the
         hold window and the RTH gate. Returns (severity, reason,
-        link_severity) where link_severity is what the link rows alone
-        desire (for combined-case logging, red-team F7).
+        immediate, link_severity) where link_severity is what the link
+        rows alone desire (for combined-case logging, red-team F7) and
+        `immediate` is True only for battery-critical: the hold-first
+        override window is skipped because the energy state only
+        worsens — hovering out the window burns the last of the pack
+        and ends in an uncontrolled drop [design].
 
         link_state: receiver health state (link_health.HEALTHY/DEGRADED/
         LOST) or None when the link is unmodeled (stub behavior). Link
@@ -271,12 +326,26 @@ class EscalationPolicy:
                     (HOVER, "link DEGRADED-evidence bucket >=5 s [design: "
                             "leaky accumulation]"))
         link_best = max(link_candidates, key=lambda c: c[0])
+        # Battery rows (graduated 2026-10-11). Most-severe-wins across
+        # sources. Critical is severest and immediate (see docstring);
+        # reserve is an RTB intent riding the generic RTH mechanism.
+        trig = self._battery_trigger(battery_soc, battery_ttr_s)
+        if trig == "critical":
+            return LAND, ("battery critical: soc<=%.2f [design: "
+                          "battery.py CRITICAL_SOC]" % CRITICAL_SOC), \
+                True, link_best[0]
+        if trig == "reserve":
+            candidates.append(
+                (RTH, "battery reserve: soc<=%.2f -> RTB intent "
+                      "(return to base, RTH mechanism) "
+                      "[design: battery.py RESERVE_SOC]" % RESERVE_SOC))
         best = max(candidates + link_candidates, key=lambda c: c[0])
-        return best[0], best[1], link_best[0]
+        return best[0], best[1], False, link_best[0]
 
     def evaluate(self, vis, far, map_age, jitter, dt,
                  pose_trustworthy=False, operator_override=False, t=0.0,
-                 landed=False, link_report=None):
+                 landed=False, link_report=None,
+                 battery_soc=None, battery_ttr_s=None):
         """One policy step. Returns (action, info dict).
 
         pose_trustworthy: RTH gate. False until an estimator clears the
@@ -300,16 +369,34 @@ class EscalationPolicy:
             with link_report=None instantly releases a link-committed
             action to HOVER; no wired caller does this (the mission
             loop always passes a report when the link is modeled).
+        battery_soc / battery_ttr_s: from battery.BatteryModel (host
+            model, simulation only). None = no battery input; the policy
+            then behaves exactly as the pre-graduation build.
         """
         # Missing slots are evaluated (always inactive) so the table is
         # complete and auditable. Once a link report is supplied the link
-        # slot is modeled, not missing.
+        # slot is modeled, not missing; same for battery inputs.
         self._link_modeled = link_report is not None
+        self._batt_modeled = battery_soc is not None
         for name, stub in self.missing_triggers.items():
             if name == "link" and self._link_modeled:
                 continue
+            if name == "battery" and self._batt_modeled:
+                continue
             fired, _ = stub.evaluate()
             assert not fired
+
+        # Battery warning latch: the warn band is a host notification
+        # level (warning is not a flight action), logged once when
+        # first entered.
+        batt_trig = self._battery_trigger(battery_soc, battery_ttr_s)
+        if batt_trig in ("warn", "reserve", "critical") \
+                and not self._batt_warned:
+            self._batt_warned = True
+            self.log.append(
+                (t, "battery_warn",
+                 f"soc={battery_soc:.3f} ttr_s={battery_ttr_s} "
+                 f"band={batt_trig} [design thresholds: battery.py]"))
 
         # Sustained-degradation timer with hysteresis reset.
         if self._degraded(vis, far):
@@ -352,8 +439,9 @@ class EscalationPolicy:
                     0.0, self._link_lost_exposure - dt)
             # DEGRADED: exposure holds (neither blackout nor recovery)
 
-        desired, reason, link_sev = self._table_action(
-            vis, far, map_age, jitter, link_state=link_state)
+        desired, reason, immediate, link_sev = self._table_action(
+            vis, far, map_age, jitter, link_state=link_state,
+            battery_soc=battery_soc, battery_ttr_s=battery_ttr_s)
 
         # Industry rule 1: hold-first. Hover IS the hold: continue->hover
         # engages immediately (the shipped FIX 3 / FIX 4 behavior is not
@@ -362,7 +450,16 @@ class EscalationPolicy:
         holding = False
         overridden = False
         commit_held = False
-        if desired <= HOVER:
+        if immediate:
+            # Battery-critical: commit now, no hold window (see
+            # _table_action). Pending state cleared so a later recovery
+            # is evaluated fresh.
+            self._pending, self._pending_timer = None, 0.0
+            action = desired
+            self.log.append(
+                (t, "battery_critical_immediate",
+                 f"action={ACTION_NAMES[desired]} reason={reason}"))
+        elif desired <= HOVER:
             # Hover engages immediately. Commit-path semantics
             # (round-2 N1/N2 fix — see the constants block):
             #  * A PENDING harsher action is NOT cancelled by a desire
@@ -535,14 +632,22 @@ class EscalationPolicy:
         return action, self._info(
             reason, gated=gated, holding=holding, overridden=overridden,
             disarmed=disarmed, commit_held=commit_held,
-            link_modeled=self._link_modeled, link_state=link_state)
+            link_modeled=self._link_modeled, link_state=link_state,
+            battery_soc=battery_soc, battery_ttr_s=battery_ttr_s,
+            battery_trigger=batt_trig,
+            batt_modeled=self._batt_modeled)
 
     @staticmethod
     def _info(reason, gated, holding=False, overridden=False,
               disarmed=False, commit_held=False, link_modeled=False,
-              link_state=None):
-        missing = ["battery", "nav_health"] if link_modeled \
-            else ["battery", "link", "nav_health"]
+              link_state=None, battery_soc=None, battery_ttr_s=None,
+              battery_trigger=None, batt_modeled=False):
+        missing = []
+        if not batt_modeled:
+            missing.append("battery")
+        if not link_modeled:
+            missing.append("link")
+        missing.append("nav_health")
         return {"reason": reason, "rth_gated": gated,
                 "holding_for_override": holding,
                 "operator_overridden": overridden,
@@ -550,7 +655,10 @@ class EscalationPolicy:
                 "commit_held": commit_held,
                 "missing_triggers": missing,
                 "link_modeled": link_modeled,
-                "link_state": link_state}
+                "link_state": link_state,
+                "battery_soc": battery_soc,
+                "battery_ttr_s": battery_ttr_s,
+                "battery_trigger": battery_trigger}
 
     # -- behavior primitives (integration contract) -------------------------
     # These are called from the mission loop AFTER the Phase 2 rebase.
@@ -632,3 +740,13 @@ class EscalationPolicy:
 #    _committed; a no-report call releases a link commitment instantly —
 #    round-3 C4, documented in LINK_MODEL.md; no wired caller does this).
 #    See sim/LINK_MODEL.md for the full build report and known limits.
+# 8. Battery layer (graduated 2026-10-11): battery.py models the battery
+#    slot; evaluate(battery_soc=..., battery_ttr_s=...) enables the
+#    battery rows (warn latch / reserve RTB intent / critical immediate
+#    LAND). battery_safety.py owns the battery decision when the safety
+#    layer is on — the mission loop then calls evaluate() WITHOUT
+#    battery inputs and maps the safety action over the escalation
+#    action (terminal battery landing overwrites, so DISARM cannot
+#    outrank it; DISARM still fires only after that landing's
+#    touchdown, via the loop's touchdown branch). See
+#    sim/BATTERY_MODEL.md for the full build report and known limits.
