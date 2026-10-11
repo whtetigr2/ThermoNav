@@ -354,6 +354,71 @@ def _below_clear(pose, marg, obs_mask, shape, radius=1):
     return True
 
 
+def _touchdown_disarm_check(policy, tracker, map_age, cfg, t_sim, log):
+    """Final DISARM check at touchdown — the loop's touchdown path.
+
+    Called ONLY from the loop's touchdown branch, which has already
+    verified:
+      - _esc_land is True: the loop executed the land behavior THIS step
+        (post below-clear veto), so the policy's _current is LAND.
+        A stale LAND in the policy with the loop hovering can never reach
+        here — the branch condition gates on the loop's own action.
+      - vehicle.pos[2] <= TOUCHDOWN_Z_M: the vehicle is on the ground.
+
+    Makes a final synchronous policy.evaluate(landed=True). If the policy
+    emits DISARM, calls disarm_behavior (outcome "landed_disarmed") and
+    returns True. Otherwise returns False and the caller falls back to
+    outcome="landed".
+
+    Defense in depth: even if this were called with _current != LAND, the
+    policy vetoes DISARM loudly (disarm_vetoed_not_landing) and returns
+    non-DISARM — the helper then returns False. DISARM cannot fire from a
+    stale policy state. If the policy is absent (escalation off), returns
+    False.
+    """
+    if policy is None:
+        return False
+    _d, _ = policy.evaluate(
+        tracker.vis_smooth if tracker is not None else 1.0,
+        tracker.far_smooth if tracker is not None else 1.0,
+        map_age, bool(cfg.get("jitter")), 1.0,
+        pose_trustworthy=False, t=t_sim, landed=True)
+    if _d == esc_mod.DISARM:
+        esc_mod.EscalationPolicy.disarm_behavior(log)
+        return True
+    return False
+
+
+def _loop_touchdown_branch(_esc_land, vehicle, _ESCALATION, _TRACKER,
+                           map_age, cfg, t_sim, log):
+    """The loop's land-in-place touchdown branch — factored verbatim from
+    the escalation hold-executive in run_mission_dynamics (was inline).
+
+    Fires only when:
+      - _esc_land is True: the loop executed the land behavior THIS step
+        (post below-clear veto), so the policy's _current is LAND. A stale
+        LAND in the policy with the loop hovering can never reach here —
+        the branch condition gates on the loop's own action.
+      - vehicle.pos[2] <= TOUCHDOWN_Z_M: touchdown reached.
+
+    On fire: final synchronous DISARM check via _touchdown_disarm_check;
+    outcome "landed_disarmed" if DISARM fires, else fallback "landed".
+    Returns True when the branch fired (caller sets outcome_set and
+    breaks), False otherwise.
+    """
+    if _esc_land and vehicle.pos[2] <= esc_mod.TOUCHDOWN_Z_M:
+        # Land-in-place complete: the loop executed the land
+        # behavior this step (_esc_land is True post below-clear
+        # veto), so the policy's _current is LAND — no
+        # stale-state hazard (see _touchdown_disarm_check).
+        # Final synchronous DISARM check; fallback to "landed".
+        if not _touchdown_disarm_check(
+                _ESCALATION, _TRACKER, map_age, cfg, t_sim, log):
+            log["outcome"] = "landed"
+        return True
+    return False
+
+
 def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                          backend="thrml", telemetry_dir=None, verbose=False,
                          progress=False, write_traj=True, debug_log=None,
@@ -559,7 +624,14 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                 outcome_set = True
                 break
             _esc_land = (_esc_action == esc_mod.LAND)
-            if _esc_action == esc_mod.RTH:  # unreachable; fail-safe
+            # RTH is unreachable today: the policy's gate
+            # (pose_trustworthy=False) converts RTH->LAND internally, so the
+            # loop never sees RTH. Kept as defense-in-depth: if the gate ever
+            # opens (estimator solved), an RTH reaching the loop means
+            # "return home" but the loop has no homing behavior — land in
+            # place (fail-safe) rather than hover forever. Loud in the log
+            # so the unexpected path is visible.
+            if _esc_action == esc_mod.RTH:
                 log["steps"].append(
                     {"step": step, "event": "esc_rth_unreachable_fallback"})
                 _esc_land = True
@@ -594,6 +666,11 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                     if inner_tick % TRAJ_RECORD_EVERY == 0:
                         _record()
                 if outcome_set:
+                    break
+                if _loop_touchdown_branch(
+                        _esc_land, vehicle, _ESCALATION, _TRACKER,
+                        map_age, cfg, t_sim, log):
+                    outcome_set = True
                     break
                 if controller.distance(tuple(float(c) for c in vehicle.pos),
                                        goal_pose) < GOAL_TOL:

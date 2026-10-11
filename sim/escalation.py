@@ -24,6 +24,13 @@ Claim label: host-side classical policy. No TSU claim.
 "Z1-legal formulation, validated in simulation" applies to the decider
 kernel (escalation_decider.py), not this module.
 
+DISARM (wired 2026-10-11, Paul's approval): the terminal ladder state now
+has a code path. DISARM fires only after LAND completes (touchdown
+confirmed) — it is a post-landing state transition, NOT a decider output:
+the 12-spin decider maps perception inputs to 4 actions and correctly has
+no DISARM island (touchdown is not a perception input). See the DISARM
+TRANSITION block in evaluate() for the guards.
+
 INTEGRATED BUILD (2026-10-10): D5 integration hooks are WIRED in
 mission_dynamics_v5.py (branch muse/escalation-policy-2026-10-10, rebased
 onto muse/tree-recon-phase2-2026-10-10). Call site: per outer step, after
@@ -60,6 +67,11 @@ HOLD_OVERRIDE_S = 10.0  # [design: PX4-style operator window before RTH/land]
 
 # Land-in-place descent (Option A fallback when RTH gated)
 LAND_DESCENT_RATE = 0.5  # m/s [design]
+
+# Touchdown confirmation threshold (mirrors land_in_place_behavior below).
+# DISARM may fire only when the vehicle reports at-or-below this altitude.
+# [design: matches the 0.05 m landed check; conservative vs rotor radius]
+TOUCHDOWN_Z_M = 0.05
 
 # Severity ladder (industry rule 2: most-severe-wins)
 CONTINUE, HOVER, RTH, LAND, DISARM = 0, 1, 2, 3, 4
@@ -137,13 +149,21 @@ class EscalationPolicy:
         return CONTINUE, "nominal"
 
     def evaluate(self, vis, far, map_age, jitter, dt,
-                 pose_trustworthy=False, operator_override=False, t=0.0):
+                 pose_trustworthy=False, operator_override=False, t=0.0,
+                 landed=False):
         """One policy step. Returns (action, info dict).
 
         pose_trustworthy: RTH gate. False until an estimator clears the
             <0.5 m/mission bar (open problem). RTH degrades to land-in-place.
         operator_override: industry hold-first rule — True cancels a pending
             harsher action back to hover during the override window.
+        landed: touchdown confirmation from the actuation layer
+            (land_in_place_behavior returns True when pos[2] <= TOUCHDOWN_Z_M).
+            DISARM fires ONLY when _current == LAND and landed is True.
+            This is the sole DISARM transition — there is deliberately NO
+            timeout-to-DISARM path: disarming in the air is an uncontrolled
+            fall. The ladder's terminal AIRBORNE state is LAND; DISARM
+            follows confirmed touchdown only.
         """
         # Missing slots are evaluated (always inactive) so the table is
         # complete and auditable.
@@ -172,7 +192,9 @@ class EscalationPolicy:
             self._pending, self._pending_timer = None, 0.0
             action = desired
         else:
-            # desired in (RTH, LAND, DISARM): hold window at hover level.
+            # desired in (RTH, LAND): hold window at hover level.
+            # (DISARM is never a table output — it fires only from the
+            # post-landing transition below, never through this path.)
             if self._pending != desired:
                 self._pending = desired
                 self._pending_timer = 0.0
@@ -212,6 +234,44 @@ class EscalationPolicy:
                  "CLOSED (estimator: open problem, no <0.5 m/mission "
                  "estimator exists) -> land-in-place fallback"))
 
+        # DISARM TRANSITION (wired 2026-10-11, Paul's approval).
+        # DISARM = motors off. It fires ONLY here: _current == LAND and
+        # the actuation layer confirms touchdown (landed=True).
+        # This covers RTH->land too: the closed RTH gate already degrades
+        # RTH to land-in-place, so every landing funnels through LAND.
+        #
+        # There is deliberately NO timeout-to-DISARM path. Sustained
+        # degradation with landed=False holds at LAND (attempting landing),
+        # never DISARM — disarming in the air is an uncontrolled fall.
+        # The ladder's terminal AIRBORNE state is LAND.
+        #
+        # Safety chain (defense in depth):
+        #   1. below-clear guard (_below_clear, mission loop): LAND descends
+        #      only if the column below is observed-clear; else HOVER.
+        #   2. touchdown confirmation: land_in_place_behavior returns True
+        #      only when pos[2] <= TOUCHDOWN_Z_M (0.05 m).
+        #   3. THIS transition: DISARM only from LAND + landed.
+        #   4. Latch below: DISARM is terminal; once committed it sticks.
+        disarmed = False
+        if self._current == DISARM:
+            # Terminal latch: DISARM sticks regardless of inputs.
+            action = DISARM
+            disarmed = True
+        elif self._current == LAND and landed:
+            action = DISARM
+            disarmed = True
+            self.log.append(
+                (t, "disarm_touchdown_confirmed",
+                 "LAND complete (touchdown confirmed) -> DISARM"))
+        elif landed and self._current != LAND:
+            # Guard: a landed flag outside LAND is ignored, loudly.
+            # (Stale flag, or touchdown via a non-policy path — the policy
+            # does not disarm what it did not land.)
+            self.log.append(
+                (t, "disarm_vetoed_not_landing",
+                 f"landed=True but _current="
+                 f"{ACTION_NAMES[self._current]}; DISARM requires LAND"))
+
         # Commit post-gate state. _current never holds a pre-gate RTH.
         if action != self._current:
             if action < self._current:
@@ -220,13 +280,15 @@ class EscalationPolicy:
             self._current = action
 
         return action, self._info(reason, gated=gated,
-                                 holding=holding, overridden=overridden)
+                                 holding=holding, overridden=overridden,
+                                 disarmed=disarmed)
 
     @staticmethod
-    def _info(reason, gated, holding=False, overridden=False):
+    def _info(reason, gated, holding=False, overridden=False, disarmed=False):
         return {"reason": reason, "rth_gated": gated,
                 "holding_for_override": holding,
                 "operator_overridden": overridden,
+                "disarmed": disarmed,
                 "missing_triggers": ["battery", "link", "nav_health"]}
 
     # -- behavior primitives (integration contract) -------------------------
@@ -241,12 +303,16 @@ class EscalationPolicy:
         """Vertical descent at LAND_DESCENT_RATE until ground contact.
         Velocity-servo: p_des=pos zeroes the outer P term; the inner PID
         tracks v_des directly. (A creeping position target descends ~100x
-        too slow.) [design]"""
+        too slow.) [design]
+
+        Returns True on touchdown (pos[2] <= TOUCHDOWN_Z_M). The mission
+        loop passes this as landed= to the next policy.evaluate(); that
+        is the SOLE trigger for the DISARM transition."""
         # command(p_des, v_des, p, v): error = p_des - p.
         a_cmd = pid.command(vehicle.pos, (0, 0, -LAND_DESCENT_RATE),
                             vehicle.pos, vehicle.vel)
         vehicle.step(a_cmd)
-        landed = vehicle.pos[2] <= 0.05
+        landed = vehicle.pos[2] <= TOUCHDOWN_Z_M
         return landed
 
     @staticmethod
@@ -260,9 +326,11 @@ class EscalationPolicy:
             "standalone build provides the policy + gate only.")
 
     @staticmethod
-    def disarm_behavior(log, outcome="stand_down"):
-        """Terminal: mission abort. Outcome string matches the existing
-        whiteout safe stand-down convention."""
+    def disarm_behavior(log, outcome="landed_disarmed"):
+        """Terminal: motors off after confirmed touchdown. Called ONLY when
+        the policy emits DISARM (which requires LAND + landed=True — see
+        the DISARM TRANSITION block in evaluate). Never call in the air.
+        Outcome string extends the existing safe stand-down convention."""
         log["outcome"] = outcome
         return True
 
@@ -281,4 +349,17 @@ class EscalationPolicy:
 #    beyond hover, never changes existing outcomes.
 # 4. RTH behavior wires to the reconciled planner (two-pass A*). Land and
 #    disarm are self-contained above.
-# 5. Manifest: log policy.log entries + final action per mission.
+# 5. DISARM wiring (2026-10-11, fixed 2026-10-11): at touchdown the loop
+#    makes a FINAL synchronous policy.evaluate(landed=True) via the
+#    mission loop's _touchdown_disarm_check — not on the next step,
+#    because the loop breaks on touchdown. The loop's own inline landing
+#    code executes the descent (land_in_place_behavior above is a
+#    standalone reference implementation, not called by the loop);
+#    _esc_land (True only post below-clear veto) gates the check, so a
+#    stale LAND in the policy can never fire DISARM while the loop is
+#    hovering. When the policy emits DISARM, the loop calls
+#    disarm_behavior(log) and ends the mission with
+#    outcome="landed_disarmed"; otherwise outcome="landed". DISARM fires
+#    only from LAND + landed=True; there is no timeout-to-DISARM path by
+#    design (disarming in the air is an uncontrolled fall).
+# 6. Manifest: log policy.log entries + final action per mission.
