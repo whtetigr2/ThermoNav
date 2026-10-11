@@ -13,6 +13,13 @@ map_age, jitter). Battery / link / nav-health trigger slots exist but are
 STUBBED as MISSING (unmodeled in sim — variable-totality: listed, not
 invented).
 
+LINK UPDATE (2026-10-11, roadmap Phase 1 item 2): the link slot is now
+MODELED by link_health.py (receiver-side HEALTHY/DEGRADED/LOST report from
+delivered-packet observables only). When evaluate() is called with a
+link_report, the link rows below fire for real and "link" leaves the
+MISSING list. Calls without a link_report keep the old stub behavior
+exactly (backwards compatible). Battery / nav-health remain MISSING.
+
 RTH CAVEAT (documented, not silent): the industry RTH assumes a known home,
 a navigable path, and working navigation. Our estimator is an open problem
 (scan-matching LEGO killed, red-team pass) and our fog is 16x below the FAA
@@ -65,6 +72,77 @@ DEGRADE_SUSTAIN_RTH_S = 30.0    # [design: Option A, "30 s no recovery -> RTH"]
 # Hold-first operator override window (industry rule 1)
 HOLD_OVERRIDE_S = 10.0  # [design: PX4-style operator window before RTH/land]
 
+# Link rows (2026-10-11; timer semantics revised after red-team round 1,
+# F1/F2). The LOST *declaration* itself is grounded in link_health.py
+# (5.0 s silence, cited ArduPilot FS_GCS_TIMEOUT default). The policy
+# timers below are LEAKY BUCKETS — one semantics for both, replacing the
+# original reset/hold mix (which was neither sustained nor honestly
+# labeled: DEGRADED reset on one HEALTHY report, so a flapping link
+# never fired; LOST held across DEGRADED gaps, so separated episodes
+# summed). Each bucket accumulates at 1x dt while its bad state (or a
+# worse one) is reported, decays at LINK_BUCKET_LEAK x dt on any better
+# report, and is floored at 0 / capped at its firing threshold. A 50%-
+# duty flapping link therefore accumulates net-positive and escalates;
+# a recovered link drains. Thresholds remain [design]:
+LINK_DEGRADED_BUCKET_S = 5.0  # [design: bucket threshold, DEGRADED-tier
+                              #  evidence -> Hold. Mirrors the perception
+                              #  5 s figure. Not measured.]
+LINK_LOST_BUCKET_S = 10.0     # [design: bucket threshold, LOST evidence
+                              #  -> RTH. The 10 s figure mirrors PX4's
+                              #  data-link-loss test timeout (docs.px4.io
+                              #  MC_04: return after 10 s, reported),
+                              #  but as a policy timer it is a design
+                              #  choice.]
+LINK_BUCKET_LEAK = 0.5        # [design: decay rate on better reports,
+                              #  as a fraction of the accumulation rate]
+
+# Commit-path semantics (red-team round 2, N1/N2 fix). Round 1 made the
+# buckets leaky but left the commit path brittle: the bucket is capped
+# at its threshold, so ONE better report dipped it below threshold,
+# the RTH desire fell, and the hold window hard-reset — a link at
+# 90-95% LOST duty with zero HEALTHY reports NEVER committed, and one
+# stray packet every <=15 s held a total-dropout link at HOVER
+# forever; symmetrically, one DEGRADED report released a committed
+# LAND outright. Two mechanisms, both leaky like the buckets:
+#
+# (1) Leaky hold progress + latched desire. Hold-window progress
+#     (_pending_timer) no longer resets when the desire dips: it
+#     accumulates at 1x dt while a harsher-than-hover action is desired
+#     and LEAKS at LINK_HOLD_LEAK x dt while it is not, so brief dips
+#     cost progress instead of cancelling the window. The leak is
+#     deliberately steep (3.5x): the fast path's break-even is ~78%
+#     desire duty across the window horizon (a dip must be paid back
+#     3.5x over in bucket-full desire). That line sits between the
+#     red team's near-miss shapes (LOST 10 s / DEGRADED 2 s: ~79%
+#     desire duty — commits on this path in ~2-3 min) and the
+#     builder's padded brief dropouts (LOST 8 s / DEGRADED 2 s: ~75%
+#     desire duty — net-negative, never commits on this path; its
+#     refill steps leak too, which is what keeps it under the line).
+#     For links whose LOST runs are too broken even for that, a second
+#     integrator latches the desire: net LOST exposure accumulates at
+#     1x dt on LOST reports, HOLDS on DEGRADED (packets flowing is not
+#     recovery, but it is not blackout either), and drains at 1x dt on
+#     HEALTHY reports; at LINK_EXPOSURE_COMMIT_S the RTH desire latches
+#     on and stays on until genuine (HEALTHY) evidence drains the
+#     exposure back below threshold. Any link a human would call dead
+#     — never healthy, blacked out half the time or more — therefore
+#     commits in bounded time (~85-160 s of wall time in the red team's
+#     straddle shapes), while links with real HEALTHY gaps drain the
+#     exposure and stay uncommitted. NOTE (round-3 C1, measured): the
+#     55%-duty 11 s/9 s LOST/HEALTHY shape does NOT latch in ~750 s or
+#     at any horizon (tested to 2400 s) — under the 75 s cap its
+#     cycle-start exposure equilibrates at 75 - gap = 66, below the
+#     latch (the 60% shape equilibrates at 67, also never). The latch
+#     fires as documented when gaps are DEGRADED, which holds
+#     exposure: 1 s LOST / 9 s DEGRADED commits at 750.5 s.
+LINK_HOLD_LEAK = 3.5          # [design: hold-progress leak rate on
+                              #  desire dips, as a fraction of the
+                              #  accumulation rate (round-2 N1 fix)]
+LINK_EXPOSURE_COMMIT_S = 75.0  # [design: net LOST-exposure (LOST time
+                              #  minus HEALTHY time, DEGRADED holds)
+                              #  at which the RTH desire latches
+                              #  (round-2 N1 fix)]
+
 # Land-in-place descent (Option A fallback when RTH gated)
 LAND_DESCENT_RATE = 0.5  # m/s [design]
 
@@ -104,6 +182,18 @@ class EscalationPolicy:
     def __init__(self):
         # Sustained-degradation timers (sim-seconds of continuous degraded band)
         self._deg_timer = 0.0
+        # Link leaky-bucket timers (from receiver reports only)
+        self._link_deg_bucket = 0.0
+        self._link_lost_bucket = 0.0
+        self._link_lost_exposure = 0.0  # net LOST exposure (N1 latch):
+                                        # +dt on LOST, hold on DEGRADED,
+                                        # -dt on HEALTHY, capped at the
+                                        # latch threshold
+        self._link_modeled = False
+        self._committed = None      # desired action that survived a hold
+                                    # window (F3: commit means commit)
+        self._gated_prev = False    # RTH-gate log dedup
+        self._link_fired_prev = 0   # link-row severity last step (logging)
         # Hold-first state: pending harsher action + override window
         self._pending = None          # action waiting out the hold window
         self._pending_timer = 0.0
@@ -130,27 +220,63 @@ class EscalationPolicy:
         return vis > VIS_CLEAR and far > FAR_CLEAR
 
     # -- policy table (Option A) --------------------------------------------
-    def _table_action(self, vis, far, map_age, jitter):
+    def _table_action(self, vis, far, map_age, jitter, link_state=None):
         """Desired severity from the Option A trigger table, ignoring the
-        hold window and the RTH gate. Returns (severity, reason)."""
+        hold window and the RTH gate. Returns (severity, reason,
+        link_severity) where link_severity is what the link rows alone
+        desire (for combined-case logging, red-team F7).
+
+        link_state: receiver health state (link_health.HEALTHY/DEGRADED/
+        LOST) or None when the link is unmodeled (stub behavior). Link
+        rows read the policy's leaky buckets, updated in evaluate() from
+        the report sequence — never the channel's hidden condition."""
         degraded = self._degraded(vis, far)
+        candidates = [(CONTINUE, "nominal")]
         # Row 3: degradation sustained 30 s -> RTH (checked first: severest)
         if degraded and self._deg_timer >= DEGRADE_SUSTAIN_RTH_S:
-            return RTH, "degraded sustained 30 s [design]"
+            candidates.append((RTH, "degraded sustained 30 s [design]"))
         # Row 1: degraded sustained 5 s -> Hold
         if degraded and self._deg_timer >= DEGRADE_SUSTAIN_HOVER_S:
-            return HOVER, "degraded sustained 5 s [design]"
+            candidates.append((HOVER, "degraded sustained 5 s [design]"))
         # Row 2: degraded AND map stale -> immediate Hold (ships as FIX 4)
         if degraded and map_age >= MAP_STALE_S:
-            return HOVER, "degraded AND map_age>=1.0 s [measured: FIX 4]"
+            candidates.append(
+                (HOVER, "degraded AND map_age>=1.0 s [measured: FIX 4]"))
         # Jitter alone does not escalate beyond what staleness already
         # triggers (jitter's effect IS map_age in this sim); it is an input
         # to the decider kernel, not a separate policy row.
-        return CONTINUE, "nominal"
+        # Link rows (leaky-bucket semantics; see the constants block):
+        link_candidates = [(CONTINUE, "nominal")]
+        if link_state is not None:
+            # LOST-evidence bucket full -> RTH (severest link row)
+            if self._link_lost_bucket >= LINK_LOST_BUCKET_S:
+                link_candidates.append(
+                    (RTH, "link LOST-evidence bucket >=10 s [design: "
+                          "leaky accumulation]"))
+            # Net LOST exposure latched -> RTH desire persists across
+            # DEGRADED dips (round-2 N1 fix; see constants block)
+            if self._link_lost_exposure >= LINK_EXPOSURE_COMMIT_S:
+                link_candidates.append(
+                    (RTH, "link net LOST exposure >=75 s latched "
+                          "[design: leaky accumulation]"))
+            # LOST declared (5 s silence, cited threshold) -> Hold now:
+            # no operator intent can arrive; hold position while the
+            # LOST bucket fills.
+            elif link_state == 2:  # LOST (link_health.LOST)
+                link_candidates.append(
+                    (HOVER, "link LOST declared (silence>=5 s) [cited]"))
+            # DEGRADED-tier bucket full -> Hold
+            if self._link_deg_bucket >= LINK_DEGRADED_BUCKET_S:
+                link_candidates.append(
+                    (HOVER, "link DEGRADED-evidence bucket >=5 s [design: "
+                            "leaky accumulation]"))
+        link_best = max(link_candidates, key=lambda c: c[0])
+        best = max(candidates + link_candidates, key=lambda c: c[0])
+        return best[0], best[1], link_best[0]
 
     def evaluate(self, vis, far, map_age, jitter, dt,
                  pose_trustworthy=False, operator_override=False, t=0.0,
-                 landed=False):
+                 landed=False, link_report=None):
         """One policy step. Returns (action, info dict).
 
         pose_trustworthy: RTH gate. False until an estimator clears the
@@ -164,10 +290,24 @@ class EscalationPolicy:
             timeout-to-DISARM path: disarming in the air is an uncontrolled
             fall. The ladder's terminal AIRBORNE state is LAND; DISARM
             follows confirmed touchdown only.
+        link_report: dict from link_health.LinkHealthTracker.report()
+            (receiver observables only), or None = link unmodeled (stub).
+            An operator override can only be *delivered* via the link:
+            callers wire the delivered-override flag, so a lost link
+            cannot produce an override (enforced by the wiring, and the
+            hold window still runs — it just cannot be cancelled).
+            Known policy-surface fact (red-team round 3, C4): a call
+            with link_report=None instantly releases a link-committed
+            action to HOVER; no wired caller does this (the mission
+            loop always passes a report when the link is modeled).
         """
         # Missing slots are evaluated (always inactive) so the table is
-        # complete and auditable.
-        for stub in self.missing_triggers.values():
+        # complete and auditable. Once a link report is supplied the link
+        # slot is modeled, not missing.
+        self._link_modeled = link_report is not None
+        for name, stub in self.missing_triggers.items():
+            if name == "link" and self._link_modeled:
+                continue
             fired, _ = stub.evaluate()
             assert not fired
 
@@ -178,7 +318,42 @@ class EscalationPolicy:
             self._deg_timer = 0.0
         # else: hold timer (in-band hysteresis, neither accumulate nor reset)
 
-        desired, reason = self._table_action(vis, far, map_age, jitter)
+        # Link leaky buckets (report sequence only). One semantics for
+        # both buckets: accumulate at 1x dt in the bad state (LOST also
+        # fills the DEGRADED-tier bucket — it is worse than degraded),
+        # decay at LINK_BUCKET_LEAK x dt on any better report, floor 0,
+        # cap at the firing threshold.
+        link_state = None
+        if link_report is not None:
+            link_state = int(link_report["state"])
+            if link_state == 0:      # HEALTHY: both buckets drain
+                self._link_deg_bucket = max(
+                    0.0, self._link_deg_bucket - LINK_BUCKET_LEAK * dt)
+                self._link_lost_bucket = max(
+                    0.0, self._link_lost_bucket - LINK_BUCKET_LEAK * dt)
+            elif link_state == 1:    # DEGRADED: deg fills, lost drains
+                self._link_deg_bucket = min(
+                    LINK_DEGRADED_BUCKET_S, self._link_deg_bucket + dt)
+                self._link_lost_bucket = max(
+                    0.0, self._link_lost_bucket - LINK_BUCKET_LEAK * dt)
+            else:                    # LOST: both fill
+                self._link_deg_bucket = min(
+                    LINK_DEGRADED_BUCKET_S, self._link_deg_bucket + dt)
+                self._link_lost_bucket = min(
+                    LINK_LOST_BUCKET_S, self._link_lost_bucket + dt)
+            # Net LOST exposure (round-2 N1 latch): +dt on LOST, hold
+            # on DEGRADED, -dt on HEALTHY; capped at the latch
+            # threshold so genuine recovery unlatches it promptly.
+            if link_state == 2:      # LOST
+                self._link_lost_exposure = min(
+                    LINK_EXPOSURE_COMMIT_S, self._link_lost_exposure + dt)
+            elif link_state == 0:    # HEALTHY drains the exposure
+                self._link_lost_exposure = max(
+                    0.0, self._link_lost_exposure - dt)
+            # DEGRADED: exposure holds (neither blackout nor recovery)
+
+        desired, reason, link_sev = self._table_action(
+            vis, far, map_age, jitter, link_state=link_state)
 
         # Industry rule 1: hold-first. Hover IS the hold: continue->hover
         # engages immediately (the shipped FIX 3 / FIX 4 behavior is not
@@ -186,15 +361,77 @@ class EscalationPolicy:
         # operator override window AT hover level.
         holding = False
         overridden = False
+        commit_held = False
         if desired <= HOVER:
-            # Hover engages immediately; recovery steps down immediately.
-            # A pending harsher action is cancelled (recovery wins).
-            self._pending, self._pending_timer = None, 0.0
+            # Hover engages immediately. Commit-path semantics
+            # (round-2 N1/N2 fix — see the constants block):
+            #  * A PENDING harsher action is NOT cancelled by a desire
+            #    dip: its hold progress leaks at LINK_HOLD_LEAK x dt
+            #    and the pending action clears only when the progress
+            #    fully drains (~3 s of absent desire at the 3.5x leak —
+            #    a genuinely recovered link drains it; a dying link's
+            #    brief dips only dent it).
+            #  * A COMMITTED action is NOT released by a dip: while
+            #    the link is modeled, release requires both link
+            #    buckets fully drained to zero. The DEGRADED bucket
+            #    drains only on HEALTHY reports and the LOST bucket
+            #    needs 20 s of better reports from full (and any
+            #    DEGRADED report refills the DEGRADED bucket), so in
+            #    practice release requires ~20 s of sustained HEALTHY
+            #    reports from FULL buckets (fast-path commits); latch
+            #    commits release in 10-15 s because their buckets are
+            #    part-drained at commit (round-3 C2, measured) —
+            #    evidence comparable in weight to the 10 s bucket +
+            #    10 s hold window that created the commit. Release
+            #    ignores the exposure integrator (round-3 C3): a latch
+            #    commit can release with exposure still at 60-65, a
+            #    re-commit head start (same straddle re-commits in
+            #    62 s vs 152 s cold) — conservative direction.
+            #    NOTE (round-3 C4, policy surface): evaluate() called
+            #    with link_report=None releases a link-committed action
+            #    instantly on this branch ("no link model" is treated
+            #    as "buckets drained"); no wired caller does this —
+            #    the mission loop always passes a report.
+            #    One DEGRADED report — all a single stray packet
+            #    manufactures — releases nothing. When the evidence
+            #    IS met, the release steps down to HOVER, never
+            #    straight to mission resumption on the release step.
+            if self._committed is not None and (
+                    link_state is not None
+                    and (self._link_lost_bucket > 0.0
+                         or self._link_deg_bucket > 0.0)):
+                action = self._committed
+                commit_held = True
+            elif self._committed is not None:
+                self.log.append(
+                    (t, "commit_released",
+                     f"released {ACTION_NAMES[self._committed]}: "
+                     f"sustained recovery evidence (link buckets "
+                     f"drained to zero); step down to hover"))
+                self._committed = None
+                action = max(desired, HOVER)
+            else:
+                action = desired
+            if self._pending is not None:
+                self._pending_timer = max(
+                    0.0, self._pending_timer - LINK_HOLD_LEAK * dt)
+                if self._pending_timer <= 0.0:
+                    self._pending = None
+        elif self._committed == desired:
+            # F3 fix (red-team round 1): this action already survived a
+            # hold window and committed. Hold the commitment — do NOT
+            # re-open the window. An operator override cancels a
+            # PENDING action during its window; it does not un-commit
+            # a committed one. Release on a desire dip goes through
+            # the sustained-evidence branch above (round-2 N2 fix).
             action = desired
         else:
             # desired in (RTH, LAND): hold window at hover level.
             # (DISARM is never a table output — it fires only from the
             # post-landing transition below, never through this path.)
+            # If the same action is still pending after a desire dip,
+            # its leaked progress resumes accumulating — the window
+            # does not re-open and no second log entry is written.
             if self._pending != desired:
                 self._pending = desired
                 self._pending_timer = 0.0
@@ -217,6 +454,7 @@ class EscalationPolicy:
             else:
                 # Window elapsed: commit the pending action.
                 action = self._pending
+                self._committed = self._pending
                 self._pending, self._pending_timer = None, 0.0
 
         # RTH GATE (the documented caveat). Applies to EVERY return path,
@@ -228,11 +466,15 @@ class EscalationPolicy:
         if action == RTH and not pose_trustworthy:
             gated = True
             action = LAND  # land-in-place fallback
-            self.log.append(
-                (t, "rth_gated_land_in_place",
-                 "RTH requested per industry ladder; pose trust gate "
-                 "CLOSED (estimator: open problem, no <0.5 m/mission "
-                 "estimator exists) -> land-in-place fallback"))
+            if not self._gated_prev:
+                self.log.append(
+                    (t, "rth_gated_land_in_place",
+                     "RTH requested per industry ladder; pose trust gate "
+                     "CLOSED (estimator: open problem, no <0.5 m/mission "
+                     "estimator exists) -> land-in-place fallback"))
+            self._gated_prev = True
+        else:
+            self._gated_prev = False
 
         # DISARM TRANSITION (wired 2026-10-11, Paul's approval).
         # DISARM = motors off. It fires ONLY here: _current == LAND and
@@ -279,17 +521,36 @@ class EscalationPolicy:
                                  f"now={ACTION_NAMES[action]}"))
             self._current = action
 
-        return action, self._info(reason, gated=gated,
-                                 holding=holding, overridden=overridden,
-                                 disarmed=disarmed)
+        # Link-escalation logging (F7 fix): log on the link rows' own
+        # severity rising edge, whether or not the link reason won the
+        # combined max() — the old reason-string check logged nothing
+        # when perception and link fired together.
+        if link_sev > self._link_fired_prev:
+            self.log.append(
+                (t, "link_escalation",
+                 f"link rows desire {ACTION_NAMES[link_sev]} "
+                 f"(combined reason: {reason})"))
+        self._link_fired_prev = link_sev
+
+        return action, self._info(
+            reason, gated=gated, holding=holding, overridden=overridden,
+            disarmed=disarmed, commit_held=commit_held,
+            link_modeled=self._link_modeled, link_state=link_state)
 
     @staticmethod
-    def _info(reason, gated, holding=False, overridden=False, disarmed=False):
+    def _info(reason, gated, holding=False, overridden=False,
+              disarmed=False, commit_held=False, link_modeled=False,
+              link_state=None):
+        missing = ["battery", "nav_health"] if link_modeled \
+            else ["battery", "link", "nav_health"]
         return {"reason": reason, "rth_gated": gated,
                 "holding_for_override": holding,
                 "operator_overridden": overridden,
                 "disarmed": disarmed,
-                "missing_triggers": ["battery", "link", "nav_health"]}
+                "commit_held": commit_held,
+                "missing_triggers": missing,
+                "link_modeled": link_modeled,
+                "link_state": link_state}
 
     # -- behavior primitives (integration contract) -------------------------
     # These are called from the mission loop AFTER the Phase 2 rebase.
@@ -363,3 +624,11 @@ class EscalationPolicy:
 #    only from LAND + landed=True; there is no timeout-to-DISARM path by
 #    design (disarming in the air is an uncontrolled fall).
 # 6. Manifest: log policy.log entries + final action per mission.
+# 7. Link-health layer (graduated 2026-10-11): link_health.py models the
+#    link slot; evaluate(link_report=...) enables the link rows (leaky
+#    buckets, leaky hold progress, net-LOST-exposure latch, bucket-drained
+#    release). Calls without a link_report keep the stub behavior above,
+#    except the commit bookkeeping (committed actions now record
+#    _committed; a no-report call releases a link commitment instantly —
+#    round-3 C4, documented in LINK_MODEL.md; no wired caller does this).
+#    See sim/LINK_MODEL.md for the full build report and known limits.

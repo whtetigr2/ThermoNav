@@ -24,6 +24,12 @@ thrust-lag, and the safety-fix stack.
 
 ## Research scripts (not entry points)
 
+`link_health.py` + `test_link_health.py` + `LINK_MODEL.md` — the
+link-health layer (graduated 2026-10-11): receiver-side link tracker and
+the escalation policy's link rows. Run `python3 test_link_health.py`
+(25 tests). The mission-loop link wiring from the research repo was not
+ported; the layer is exercised at tracker + policy level here.
+
 `slam_test.py`, `slam_obscurant.py`, `sampler_tracking_test.py`,
 `tune_pid.py`, `tune_turn.py`, `analyze_*.py`, `turn_metrics.py` — analysis and
 tuning experiments. They run, but they are not the validated path.
