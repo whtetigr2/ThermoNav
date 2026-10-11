@@ -57,6 +57,7 @@ import planner
 import controller
 import classical
 import s16 as s16_module
+import escalation as esc_mod
 
 from vehicle_v3 import (Phase3Vehicle, V_MAX, DT, A_MAX_OLD, envelope,
                         TW_PRIMARY, TAU_TILT)
@@ -319,6 +320,40 @@ def _get_backend(backend):
     return marg, make_s2
 
 
+def _below_clear(pose, marg, obs_mask, shape, radius=1):
+    """Guard for escalation land-in-place: is the vertical column below the
+    drone known-clear in the CURRENT perceived map?
+
+    Measured 2026-10-10: blind descent in whiteout collided 4/16 with
+    unmapped obstacles directly below the hover point. The industry "land"
+    rung assumes terrain awareness; without a downward sensor, we only
+    descend into space the current map marks observed AND clear
+    (P(occ) < P_OBSTACLE). Unknown or occupied below -> hold (HOVER).
+
+    This is an actuation guard in the loop, not policy logic: the policy
+    (red-team PASS) says "land"; the loop lands safely or holds if it
+    can't verify the ground. Documented, not silent (esc_land_vetoed).
+    """
+    try:
+        v = planner.pose_to_voxel(pose, shape)
+    except ValueError:
+        return False
+    x, y, z = int(v[0]), int(v[1]), int(v[2])
+    for dz in range(1, z + 1):  # down to the floor voxel layer
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                xx, yy, zz = x + dx, y + dy, z - dz
+                if not (0 <= xx < shape[0] and 0 <= yy < shape[1]
+                        and 0 <= zz < shape[2]):
+                    continue
+                vv = (xx, yy, zz)
+                if not bool(obs_mask[vv]):
+                    return False  # unknown below: do not descend
+                if float(marg[vv]) >= planner.P_OBSTACLE:
+                    return False  # occupied below: do not descend
+    return True
+
+
 def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                          backend="thrml", telemetry_dir=None, verbose=False,
                          progress=False, write_traj=True, debug_log=None,
@@ -329,12 +364,22 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     compute_marginals, make_s2 = _get_backend(backend)
 
     # ---- Phase 3 per-run physics config ----
-    global A_BRAKE, A_PLAN, FILTER_TAU, _TRACKER, _FIX1, _FIX2, _FIX3
+    global A_BRAKE, A_PLAN, FILTER_TAU, _TRACKER, _FIX1, _FIX2, _FIX3, _FIX4
+    global _ESCALATION
     cfg = dict(cfg or {})
     _FIX1 = bool(cfg.get("fix_atten_d5", False))
     _FIX2 = bool(cfg.get("fix_confirm", False))
     _FIX3 = bool(cfg.get("fix_lowvis", False))
-    _TRACKER = ofix.EvidenceTracker(shape) if (_FIX1 or _FIX2 or _FIX3) else None
+    _FIX4 = bool(cfg.get("fix_stale", False))
+    _TRACKER = ofix.EvidenceTracker(shape) \
+        if (_FIX1 or _FIX2 or _FIX3 or _FIX4) else None
+    # Escalation layer: Option A industry-mirror policy. Off unless
+    # cfg["escalation"] is set. The policy is host-side classical
+    # (red-team PASS 2026-10-10); the decider kernel is exercised by
+    # test_escalation.py, not the mission loop.
+    # pose_trustworthy is hardcoded False (estimator: open problem) —
+    # RTH degrades to land-in-place inside the policy.
+    _ESCALATION = esc_mod.EscalationPolicy() if cfg.get("escalation") else None
     _grav = bool(cfg.get("gravity_envelope", False))
     _tw = float(cfg.get("tw_ratio", TW_PRIMARY))
     if _grav:
@@ -428,7 +473,8 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             _, _, n_skipped = obscurant.integrate_scan(
                 logodds, shape, scans, max_range=40.0, obs_count=obs_count)
         log["n_rays_skipped"] = log.get("n_rays_skipped", 0) + n_skipped
-        hover_mode = bool(_FIX3 and _TRACKER is not None and _TRACKER.hover)
+        hover_mode = bool(_TRACKER is not None and (
+            (_FIX3 and _TRACKER.hover) or (_FIX4 and _TRACKER.stale_hover)))
         log["n_hover_scans"] = log.get("n_hover_scans", 0) + int(hover_mode)
         log["vis_min"] = min(log.get("vis_min", 1.0),
                              _TRACKER.vis_smooth if _TRACKER else 1.0)
@@ -439,6 +485,41 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             logodds, h, x_last, seed, step)
         log["total_gibbs_time"] += dt_gibbs
         obs_mask = effective_observed_mask(logodds, obs_count, "tsu")
+
+        # FIX 4: map staleness (sim-seconds since last fresh publish).
+        # ThermoNav has no jitter controller (lab test infrastructure);
+        # map_age is 0.0 here — the gate never fires, correctly. The
+        # wiring is preserved so the escalation policy's stale input
+        # stays live if a staleness source is added later.
+        map_age = 0.0
+        if _TRACKER is not None:
+            _TRACKER.update_stale(map_age, fix4=_FIX4)
+
+        # ---- Escalation policy (Option A, industry mirror) ----
+        # Integration contract (escalation.py): evaluated per outer step,
+        # AFTER tracker.update_stale(). Final action = max(shipped,
+        # escalation) by severity — escalation only ADDS beyond hover,
+        # never contradicts FIX 3 / FIX 4. dt = 1.0 s (outer step rate).
+        _esc_action = esc_mod.HOVER if hover_mode else esc_mod.CONTINUE
+        if _ESCALATION is not None:
+            _a, _ = _ESCALATION.evaluate(
+                _TRACKER.vis_smooth if _TRACKER is not None else 1.0,
+                _TRACKER.far_smooth if _TRACKER is not None else 1.0,
+                map_age, False, 1.0,
+                pose_trustworthy=False, t=t_sim)
+            _esc_action = max(_esc_action, _a)
+            if _a > (esc_mod.HOVER if hover_mode else esc_mod.CONTINUE):
+                log["esc_engaged_scans"] = log.get("esc_engaged_scans", 0) + 1
+        if _esc_action > log.get("esc_max_sev", 0):
+            log["esc_max_sev"] = _esc_action
+        # LAND precondition (actuation guard, not policy): the vertical
+        # column below must be known-clear in the current perceived map.
+        # Blind descent collided 4/16 in whiteout (measured 2026-10-10).
+        # If below is unknown/occupied, degrade to HOVER (hold) — loudly.
+        if _esc_action == esc_mod.LAND and _ESCALATION is not None:
+            if not _below_clear(pose, marg, obs_mask, shape):
+                _esc_action = esc_mod.HOVER
+                log["esc_land_vetoed"] = log.get("esc_land_vetoed", 0) + 1
 
         # ---- D3: goal-blocked check ----
         if (controller.distance(pose, goal_pose) < GOAL_BLOCKED_RADIUS
@@ -467,13 +548,41 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             # the dynamics layer manages this planner state.)
             if tsu_sub == 0:
                 s16p._goal_fallback = False
-            if hover_mode:
-                # FIX 3 low-vis executive: hold position, keep the 100 Hz
-                # dynamics + collision check running, skip S2/D5. Mapping
-                # (scan + Gibbs above) continues every outer step.
+            # ---- Escalation behavior (Option A) ----
+            # _esc_action = max(shipped, escalation) by severity. DISARM is
+            # terminal stand-down; LAND descends in place; HOVER holds
+            # (shipped FIX 3/4 or escalation hover). RTH is unreachable —
+            # the gate (pose_trustworthy=False) converts RTH->LAND inside
+            # the policy; the fallback below is loud and fail-safe.
+            if _esc_action == esc_mod.DISARM:
+                esc_mod.EscalationPolicy.disarm_behavior(log)
+                outcome_set = True
+                break
+            _esc_land = (_esc_action == esc_mod.LAND)
+            if _esc_action == esc_mod.RTH:  # unreachable; fail-safe
+                log["steps"].append(
+                    {"step": step, "event": "esc_rth_unreachable_fallback"})
+                _esc_land = True
+            if _esc_action >= esc_mod.HOVER:
+                # Hold executive: hold position (FIX 3/4 hover or escalation
+                # hover) or descend (escalation land-in-place). Keeps the
+                # 100 Hz dynamics + collision check running, skips S2/D5.
+                # Mapping (scan + Gibbs above) continues every outer step.
+                # NOTE: with escalation off, _esc_action == HOVER iff
+                # hover_mode, _esc_land is False, and _tgt == vehicle.pos —
+                # bit-identical to the shipped hover branch.
                 for _ in range(INNER_PER_SUBSTEP):
-                    a_cmd = pid.command(vehicle.pos, (0, 0, 0),
-                                        vehicle.pos, vehicle.vel)
+                    if _esc_land:
+                        # Land-in-place: velocity-servo descent.
+                        # p_des=pos zeroes the outer P term; the inner PID
+                        # tracks v_des=(0,0,-rate) directly.
+                        a_cmd = pid.command(
+                            vehicle.pos,
+                            (0, 0, -esc_mod.LAND_DESCENT_RATE),
+                            vehicle.pos, vehicle.vel)
+                    else:
+                        a_cmd = pid.command(vehicle.pos, (0, 0, 0),
+                                            vehicle.pos, vehicle.vel)
                     p_prev = vehicle.pos.copy()
                     vehicle.step(a_cmd)
                     t_sim += DT
@@ -794,8 +903,19 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     row["fix_atten_d5"] = int(_FIX1)
     row["fix_confirm"] = int(_FIX2)
     row["fix_lowvis"] = int(_FIX3)
+    row["fix_stale"] = int(_FIX4)
     row["n_hover_scans"] = log.get("n_hover_scans", 0)
     row["vis_min"] = round(log.get("vis_min", 1.0), 3)
+    # ---- Escalation layer (Option A, industry mirror) ----
+    row["esc_enabled"] = int(_ESCALATION is not None)
+    row["esc_final_action"] = esc_mod.ACTION_NAMES[log.get("esc_max_sev", 0)]
+    row["esc_engaged_scans"] = log.get("esc_engaged_scans", 0)
+    row["esc_n_events"] = len(_ESCALATION.log) \
+        if _ESCALATION is not None else 0
+    row["esc_rth_gated"] = sum(
+        1 for _, e, _ in _ESCALATION.log if e == "rth_gated_land_in_place") \
+        if _ESCALATION is not None else 0
+    row["esc_land_vetoed"] = log.get("esc_land_vetoed", 0)
     return row
 
 MANIFEST_FIELDS_V3 = list(MANIFEST_FIELDS_V2) + ["tier", "config_name",
@@ -804,7 +924,9 @@ MANIFEST_FIELDS_V3 = list(MANIFEST_FIELDS_V2) + ["tier", "config_name",
 MANIFEST_FIELDS_V4 = MANIFEST_FIELDS_V3 + ["obsc_archetype", "obsc_density",
     "obsc_sigma", "backend"]
 MANIFEST_FIELDS_V5 = MANIFEST_FIELDS_V4 + ["fix_atten_d5", "fix_confirm",
-    "fix_lowvis", "n_hover_scans", "vis_min"]
+    "fix_lowvis", "fix_stale", "n_hover_scans", "vis_min",
+    "esc_enabled", "esc_final_action", "esc_engaged_scans", "esc_n_events",
+    "esc_rth_gated", "esc_land_vetoed"]
 
 
 def main():

@@ -83,6 +83,32 @@ FAR_RANGE = 10.0         # m: "far" hit threshold [design: beyond phantom
                          # clip range]
 
 
+# ---------------------------------------------------------------- FIX 4
+# Stale-map stand-down: D5's vetoes are only as good as the map they see.
+# When the published map is BOTH degraded (fog band, live tracker signal)
+# AND stale (pipeline freeze), stand down (hover) instead of deciding on
+# a lie. Conjunctive by measured necessity: a staleness-only gate would
+# fire on clear-air died_8 (6/14, 0 collisions — fails safe already),
+# pure false-positive cost, zero safety gain. Host-layer classical;
+# no TSU/kernel/Z1 impact.
+STALE_VIS_ENTER = 0.70   # degraded band: vis below this [measured:
+                         # moderate 0.86 (out), heavy 0.61 (in)]
+STALE_FAR_ENTER = 0.10   # and far-hit fraction below this [measured:
+                         # moderate 0.15 (out), heavy 0.04 (in)]
+STALE_VIS_EXIT = 0.75    # band exit (hysteresis) [design]
+STALE_FAR_EXIT = 0.15    # band exit (hysteresis) [design]
+STALE_AGE_S = 1.0        # map staleness trigger, sim-seconds [measured:
+                         # collision freeze window was 2.0 s; 1.0 s is
+                         # a 2x engineering margin under it]
+STALE_SKIP_ENTER = 0.15  # degraded band: skip fraction above this
+                         # [measured: clear 0.005, moderate 0.33, heavy
+                         # 0.54, whiteout 0.30 — huge margin both ways.
+                         # Skip rate is motion- and geometry-robust where
+                         # vis/far are not: clear-air motion dips vis to
+                         # 0.69 and tight rooms dip far to 0.045, which
+                         # false-latched the vis/far-only band.]
+
+
 class EvidenceTracker:
     """Per-scan evidence for the three fixes. One instance per mission."""
 
@@ -98,6 +124,11 @@ class EvidenceTracker:
         self.n_scans = 0
         self.n_hover_scans = 0                         # stats
         self.refusals_at_scan = []                     # FIX 3: D5 health
+        self.stale_band = False      # FIX 4: latched degraded-perception band
+        self.stale_hover = False     # FIX 4 output: stand down on stale map
+        self.n_stale_hover_scans = 0  # stats
+        self.skip_smooth = 0.0       # FIX 4: smoothed ray skip fraction
+                                     # (fog signal; starts clear)
 
     def _in_bounds(self, v):
         return (0 <= v[0] < self.shape[0] and 0 <= v[1] < self.shape[1]
@@ -155,6 +186,17 @@ class EvidenceTracker:
             far = n_far / n_hit
             self.far_smooth = (VIS_SMOOTH_A * self.far_smooth
                                + (1 - VIS_SMOOTH_A) * far)
+        # FIX 4: ray skip fraction (fog signal). Motion- and geometry-
+        # robust: attenuation kills returns regardless of drone motion or
+        # room size, where vis dips under motion and far dips in tight
+        # rooms. Measured [simulation, static]: clear 0.005, moderate
+        # 0.33, heavy 0.54, whiteout 0.30.
+        n_scan = len(scans)
+        if n_scan > 0:
+            n_skip = sum(1 for t in scans if not t[4])
+            skip = n_skip / n_scan
+            self.skip_smooth = (VIS_SMOOTH_A * self.skip_smooth
+                                + (1 - VIS_SMOOTH_A) * skip)
         if fix3:
             blind = (self.vis_smooth < VIS_ENTER
                      and self.far_smooth < FAR_ENTER)
@@ -187,6 +229,40 @@ class EvidenceTracker:
                     self.hover_scans = 0
         self.n_scans += 1
         return n_ret, n_con
+
+    def update_stale(self, map_age_s, fix4=True):
+        """FIX 4: conjunctive stale-map stand-down. Call once per outer
+        step, AFTER update() (needs vis_smooth/far_smooth).
+
+        map_age_s: sim-seconds since the last fresh publish (0.0 when no
+        jitter is configured — the gate then never fires, correctly).
+        Sets self.stale_hover: True while the map is BOTH stale
+        (map_age_s >= STALE_AGE_S) AND perception is in the degraded band.
+        Direct signal-following (no scan counting): hover chains through
+        sustained freezes, releases on the first fresh publish.
+        """
+        if not fix4:
+            self.stale_hover = False
+            return
+        # Degraded band with hysteresis (live tracker signals, shared
+        # with FIX 1/3 — the sensor keeps scanning during a freeze, so
+        # these see reality even when the published map is stale).
+        # Triple conjunct: vis+far alone false-latch in clear tight rooms
+        # under motion (vis dips to 0.69, far to 0.045 [measured]); skip
+        # rate is the motion/geometry-robust fog discriminator.
+        degraded = (self.vis_smooth < STALE_VIS_ENTER
+                    and self.far_smooth < STALE_FAR_ENTER
+                    and self.skip_smooth > STALE_SKIP_ENTER)
+        clear = (self.vis_smooth > STALE_VIS_EXIT
+                 and self.far_smooth > STALE_FAR_EXIT)
+        if degraded:
+            self.stale_band = True
+        elif clear:
+            self.stale_band = False
+        self.stale_hover = bool(self.stale_band
+                                and map_age_s >= STALE_AGE_S)
+        if self.stale_hover:
+            self.n_stale_hover_scans += 1
 
 
 def integrate_scan_fixes(logodds, occ_shape, scans, tracker,
@@ -271,6 +347,15 @@ def safe_to_enter_fixes(voxel, marg, obs_mask, pos_v, tracker, fix1=True):
     planner.py untouched.
     """
     v = (int(voxel[0]), int(voxel[1]), int(voxel[2]))
+    nx, ny, nz = obs_mask.shape
+    if not (0 <= v[0] < nx and 0 <= v[1] < ny and 0 <= v[2] < nz):
+        # Out-of-bounds S2 proposal: deny, matching planner.safe_to_enter's
+        # documented contract ("Returns False for: out-of-bounds voxels").
+        # Without this, the FIX 1 branch below indexed obs_mask[v] on an
+        # off-grid proposal and raised IndexError — seen in whiteout,
+        # where vis_smooth < VIS_FIX1_ENTER activates this branch. In clear
+        # air the branch never executes, so behavior there is unchanged.
+        return False
     if fix1 and tracker.vis_smooth < VIS_FIX1_ENTER:
         if not bool(obs_mask[v]):
             return False

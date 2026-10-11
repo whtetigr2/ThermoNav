@@ -19,7 +19,7 @@ ThermoNav's decision-maker is an 18-spin Ising model (6 directions × 3 steps of
 
 - `s2_theta/` — the trained kernel: `s2_theta_v2.npz` (the 123 params), human-readable `params.txt`, training scripts (`train_s2_theta_v2.py`), drop-in agent (`s2_learned.py`, defaults to v2), evaluation + generalization benchmark (`eval_v2.py`, `bench_generalization.py`), training data (`s2_data*.npz`, manifest in `CHECKPOINTS.md`), and full docs (`S2_THETA.md`, `GENERALIZATION.md` — including the honest failure log).
 - `thermopilot/` — the navigation harness: `harness.py` (S2 teacher agent, A* planner, D5 safety veto), `ising.py` (Ising helpers), `gibbs_ising.py` (the sampler). See `thermopilot/README.md`.
-- `sim/` — the dynamics validation suite (point-mass physics, wind, obscurants, fix validation; Phases 1–4). Entry points in `sim/README.md`.
+- `sim/` — the dynamics validation suite (point-mass physics, wind, obscurants, fix validation; Phases 1–4). Entry points in `sim/README.md`. Includes the escalation ladder: `escalation.py` (Option A industry-mirror policy, host-side classical), `escalation_decider.py` (12-spin Z1-legal decider kernel), `test_escalation.py` (128-combo oracle test), `docs/ESCALATION_BUILD.md`, wired into `mission_dynamics_v5.py` via per-step evaluation and `max(shipped, escalation)`.
 - `rooms/` — 30 HM3D indoor occupancy grids used for training and benchmarking.
 - `redteam/` — the red-team record: jitter envelope, real-world jitter research, multi-modal negative, both Evidence-θ negatives, D5 freshness gate. Start at [`REDTEAM.md`](REDTEAM.md).
 - `requirements.txt`, `.gitignore` — dependencies and hygiene.

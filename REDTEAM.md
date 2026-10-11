@@ -17,6 +17,8 @@ provenance (measured / calculated / assumed).
 | S2-θ v2 kernel | **SHIPS** | 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14 [measured]. Tight geometry 16/16, noise 0.30 16/16, heavy fog 11/13 (fails safe) — 96 paired flights [measured] |
 | Deterministic argmax readout | **SHIPS** | 22/22 vs stochastic 0/9 paired [measured] — [`MULTIMODAL.md`](redteam/MULTIMODAL.md) |
 | D5 freshness gate (FIX 4) | **SHIPS** | Fog+jitter collision cell 0 collisions (was 1); whiteout+jitter 0 (was 2); 28 clear-air missions zero false fires [measured] — [`FRESHNESS_GATE.md`](redteam/FRESHNESS_GATE.md) |
+| Escalation ladder (Option A, industry mirror) | **SHIPS** | warn → hold → RTH → land → disarm; hold-first + most-severe-wins [design]. 12-spin Z1-legal decider (max\|h\|=4.0, max\|J\|=1.0, degree 2), 128/128 vs policy oracle [measured]. RTH gated on pose trust (gate closed → land-in-place, logged) [design + measured estimator gap]. Below-clear landing guard: LAND only if below-column observed and P(occ)<0.3, else hover [measured: blind land collided 4/16 pre-guard, 0 post-guard]. Battery/link/nav-health triggers stubbed as MISSING. Claim: "Z1-legal formulation, validated in simulation" (decider); host-side classical (policy/wiring). |
+| D5 integration (escalation) | **SHIPS** | Per-step policy evaluation, max(shipped, escalation) — escalation only adds severity, never reduces [measured: 20-mission validation, 0 collisions, shipped parity]. Red-team PASS (integration). |
 
 ## Killed (honest negatives)
 
@@ -32,7 +34,7 @@ provenance (measured / calculated / assumed).
 - **Compute-jitter envelope** — 182 missions: clear air holds to 5 s single delays, bursts, periodic misses; ≈0.5 Hz perception fails safe (wanders, never collides); heavy fog + severe jitter produced 1 honest collision (replicated, not a flake) — the corner the freshness gate now closes. Validated at noise 0.15 throughout [measured] — [`JITTER.md`](redteam/JITTER.md)
 - **Jitter in the real world** — what actually causes multi-second stalls (Python GC pauses measured to 2.2 s; thermal throttling; sensor dropout) and how hobbyist / mil-spec / racing / legged platforms survive it (fast inner loop never stalls; freshness-gated outer loop). Web research, gaps marked MISSING — [`JITTER_REAL_WORLD.md`](redteam/JITTER_REAL_WORLD.md)
 - **Known limitation: heavy fog** — learned 11/13 vs teacher 13/16; both fail safe (goal_blocked), zero collisions [measured]
-- **Known limitation: whiteout** — safe but not operational (0/8 flights, 8/8 safely blocked). Needs another modality (radar), not more training.
+- **Known limitation: whiteout** — safe but not operational (0/8 flights, 8/8 safely blocked). Needs another modality (radar), not more training. The whiteout IndexError guard (bounds-check before array access, deny in safe direction) is now in the shipped `sim/obscurant_fixes.py` and `sim/planner.py` [measured: off-grid probe returns False].
 
 ## Method
 

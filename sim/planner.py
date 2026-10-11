@@ -283,11 +283,15 @@ def is_blind_spot(voxel, observed_mask, current_pos):
     import math
     vx, vy, vz = int(voxel[0]), int(voxel[1]), int(voxel[2])
     v = (vx, vy, vz)
-    if bool(observed_mask[v]):
-        return False  # observed (from some angle) — not blind
     nx, ny, nz = observed_mask.shape
     if not (0 <= vx < nx and 0 <= vy < ny and 0 <= vz < nz):
+        # Off the map: not a peek candidate (denied upstream by
+        # safe_to_enter). Bounds check MUST precede indexing — the
+        # observed_mask[v] read below raised IndexError on off-grid
+        # S2 proposals in whiteout (indoorcd_173_s80510).
         return False
+    if bool(observed_mask[v]):
+        return False  # observed (from some angle) — not blind
     cp = (int(current_pos[0]), int(current_pos[1]), int(current_pos[2]))
     if v == cp:
         return False
