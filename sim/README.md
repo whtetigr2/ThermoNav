@@ -98,6 +98,24 @@ boundaries (open-room wall-lane blindness, 3-paint phantom bound,
 131 dodge-geometry) are recorded in `DYNLayer_RESULTS.md` and
 travel with the layer.
 
+`_land_hold_update` + `test_belowclear_hold.py` (5 tests) +
+`BELOWCLEAR_PHASE0.md` + `BELOWCLEAR_VALIDATION.md` — the
+below-clear bounded hold, Option A (graduated 2026-10-12, after
+research red-team PASS WITH CAVEATS): for non-battery LAND
+demands, a continuous below-clear veto episode expires after
+`cfg["land_hold_window_s"]` seconds (opt-in, default OFF = legacy
+bit-identical) and the descent proceeds at creep rate regardless
+of veto state; the battery terminal bypass and batt-crit
+relaxation outrank the hold. Phase 0 (Paul's
+ground-representation challenge) found the record rooms' GT grids
+carry no floor and the sensor fan never applies vehicle attitude —
+the permanently-UNKNOWN descent column was substantially a
+modeling artifact, and that caveat attaches to every price in
+`BELOWCLEAR_VALIDATION.md`. Run
+`python3 run_belowclear_validation.py` for the 3 paired cells
+(6/6 gates at the graduation code commit `d651823`;
+`belowclear_validation.csv`).
+
 `slam_test.py`, `slam_obscurant.py`, `sampler_tracking_test.py`,
 `tune_pid.py`, `tune_turn.py`, `analyze_*.py`, `turn_metrics.py` — analysis and
 tuning experiments. They run, but they are not the validated path.
