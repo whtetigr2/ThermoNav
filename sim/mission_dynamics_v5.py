@@ -61,6 +61,9 @@ import escalation as esc_mod
 import battery as batt_mod
 import battery_safety as bsafe_mod
 import nav_health as nh_mod
+import motion as motion_mod
+import dynlayer as dynlayer_mod
+import dodge as dodge_mod
 
 from vehicle_v3 import (Phase3Vehicle, V_MAX, DT, A_MAX_OLD, envelope,
                         TW_PRIMARY, TAU_TILT)
@@ -92,6 +95,11 @@ _BATTERY = None       # per-run BatteryModel (battery layer, graduated
 _SAFETY = None        # per-run BatterySafetyController (Paul's design)
 _NAVHEALTH = None     # per-run NavHealthMonitor (nav-health layer,
                       # graduated 2026-10-11)
+_MOTION = None        # per-run motion/dynamic layer (dynlayer graduation
+                      # 2026-10-12): DynLayer in the _MOTION slot, or its
+                      # predecessor motion.MotionBuffer
+_MOTION_VETO_HIT = False  # set when a swept-path voxel fails on motion
+_DODGE = None         # per-run DodgeController (on top of _MOTION)
 INNER_PER_SUBSTEP = 10          # 100 Hz dynamics, 10 Hz decisions
 TRAJ_RECORD_EVERY = 5           # 20 Hz demo feed (contract dt=0.05)
 
@@ -251,6 +259,10 @@ def _vel_swept_ok(pos, v_cmd, pos_v, marg, obs_mask, shape,
             return False
         if not ofix.safe_to_enter_fixes(v, marg, obs_mask, pos_v, _TRACKER, _FIX1):
             return False
+        if _MOTION is not None and _MOTION.blocks(v):
+            global _MOTION_VETO_HIT
+            _MOTION_VETO_HIT = True
+            return False
     return True
 
 
@@ -267,6 +279,10 @@ def _traj_passes_d5(seg, pos_v, marg, obs_mask, shape, n_samples=10):
                 and 0 <= v[2] < shape[2]):
             return False
         if not ofix.safe_to_enter_fixes(v, marg, obs_mask, pos_v, _TRACKER, _FIX1):
+            return False
+        if _MOTION is not None and _MOTION.blocks(v):
+            global _MOTION_VETO_HIT
+            _MOTION_VETO_HIT = True
             return False
     return True
 
@@ -563,6 +579,7 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     # ---- Phase 3 per-run physics config ----
     global A_BRAKE, A_PLAN, FILTER_TAU, _TRACKER, _FIX1, _FIX2, _FIX3, _FIX4
     global _ESCALATION, _BATTERY, _SAFETY, _NAVHEALTH
+    global _MOTION, _MOTION_VETO_HIT, _DODGE
     cfg = dict(cfg or {})
     _FIX1 = bool(cfg.get("fix_atten_d5", False))
     _FIX2 = bool(cfg.get("fix_confirm", False))
@@ -570,6 +587,25 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     _FIX4 = bool(cfg.get("fix_stale", False))
     _TRACKER = ofix.EvidenceTracker(shape) \
         if (_FIX1 or _FIX2 or _FIX3 or _FIX4) else None
+    # Motion / dynamic layer (dynlayer v3, graduated 2026-10-12 from
+    # thermo-work muse/roadmap-movers-2026-10-11, RT-2 PASS WITH
+    # CAVEATS): DynLayer is the MotionBuffer successor in the _MOTION
+    # slot — cfg["dyn_layer"] takes precedence, same _MOTION
+    # interface; cfg["motion_layer"] keeps the predecessor available
+    # for A/B. Off unless either flag is set.
+    if cfg.get("dyn_layer"):
+        _MOTION = dynlayer_mod.DynLayer(shape)
+    elif cfg.get("motion_layer"):
+        _MOTION = motion_mod.MotionBuffer(shape)
+    else:
+        _MOTION = None
+    _MOTION_VETO_HIT = False
+    # Dodge layer: linear threat projection + reactive sidestep on top
+    # of the motion layer (DodgeController unchanged from research).
+    # Requires the motion layer (the trail is its input).
+    _DODGE = dodge_mod.DodgeController() if cfg.get("dodge_layer") else None
+    if _DODGE is not None and _MOTION is None:
+        raise ValueError("dodge_layer requires motion_layer")
     # Escalation layer: Option A industry-mirror policy. Off unless
     # cfg["escalation"] is set. The policy is host-side classical
     # (red-team PASS 2026-10-10); the decider kernel is exercised by
@@ -639,6 +675,17 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     _return_target = None           # active RTB/RTC target pose, if any
     vehicle = Phase3Vehicle(pos=start_pose, cfg=cfg, seed=seed)
     pid = CascadedPID()  # tuned gains are the defaults
+    # ---- Dynamic obstacles (movers.py, ported with the dynlayer
+    # graduation 2026-10-12) ----
+    # Movers are rendered into a per-step GT copy BEFORE the 1 Hz scan
+    # and the DDA collision check. The stack sees a mover only through
+    # sensor evidence in the occupancy map — never its velocity vector.
+    _movers = None
+    _mspec = cfg.get("movers")
+    if _mspec:
+        from movers import Movers as _Movers
+        _movers = _Movers(_mspec)
+        log_mover_min_dist = float("inf")
 
     def _pid_issue(p_des, v_des):
         _issued_cmd[0] = float(np.linalg.norm(
@@ -707,7 +754,16 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                   f"vel={np.linalg.norm(vehicle.vel):.2f}", flush=True)
 
         # ---- 1 Hz host: scan from TRUE continuous pose ----
-        scans = obscurant.scan_pose(occ, pose, n_az=N_AZ, elevations=ELEV,
+        # Dynamic movers (if any) are rendered into the GT occupancy
+        # BEFORE the scan, so the lidar sees them exactly as it would
+        # a real mover. occ_scan is frozen at the 1 Hz sensor rate;
+        # occ_dyn (collision GT) is refreshed at 10 Hz inside the TSU
+        # loop below, since a 2 m/s mover outruns 1 Hz voxels.
+        occ_scan = _movers.render(occ, t_sim) \
+            if _movers is not None else occ
+        occ_dyn = occ_scan
+        scans = obscurant.scan_pose(occ_scan, pose, n_az=N_AZ,
+                                    elevations=ELEV,
                                     max_range=40.0, range_noise=noise_val,
                                     seed=1000 + seed * 100 + step)
         if _TRACKER is not None:
@@ -720,6 +776,13 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             _, _, n_skipped = obscurant.integrate_scan(
                 logodds, shape, scans, max_range=40.0, obs_count=obs_count)
         log["n_rays_skipped"] = log.get("n_rays_skipped", 0) + n_skipped
+        # Motion/dynamic layer: ingest the raw scan BEFORE Gibbs
+        # smoothing. The static map is not allowed to touch the layer.
+        if _MOTION is not None:
+            _MOTION.update(scans, t_sim, logodds)
+        # Dodge layer: snapshot the confirmed trail (1 Hz cadence).
+        if _DODGE is not None:
+            _DODGE.observe(_MOTION, t_sim)
         hover_mode = bool(_TRACKER is not None and (
             (_FIX3 and _TRACKER.hover) or (_FIX4 and _TRACKER.stale_hover)))
         log["n_hover_scans"] = log.get("n_hover_scans", 0) + int(hover_mode)
@@ -961,6 +1024,10 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
 
         # ---- 10 Hz TSU fast loop, 100 Hz dynamics inside ----
         for tsu_sub in range(TSU_SUBSTEPS):
+            # 10 Hz collision GT refresh for movers (1 Hz scan stays
+            # frozen above — the sensor rate is the point of the test).
+            if _movers is not None:
+                occ_dyn = _movers.render(occ, t_sim)
             pose = tuple(float(c) for c in vehicle.pos)
             try:
                 pos_v = planner.pose_to_voxel(pose, shape)
@@ -1024,7 +1091,11 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                     vehicle.step(a_cmd)
                     t_sim += DT
                     inner_tick += 1
-                    if _segment_hits_occ(p_prev, vehicle.pos, occ):
+                    if _movers is not None:
+                        _md = _movers.min_dist(vehicle.pos, t_sim)
+                        if _md < log_mover_min_dist:
+                            log_mover_min_dist = _md
+                    if _segment_hits_occ(p_prev, vehicle.pos, occ_dyn):
                         log["outcome"] = "collision"
                         outcome_set = True
                         break
@@ -1045,164 +1116,246 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                     outcome_set = True
                     break
                 continue
-            next_v, s2info = s16p.tsu_act(
-                pos_v, goal_v, marg, obs_mask, pos_cont=pose)
-            log["n_tsu_decisions"] += 1
-            log["total_tsu_time"] += s2info["tsu_time"]
-            _sf = float(s2info.get("speed_factor", 1.0))
-            # CBF supervisor: never outrun the stopping distance to
-            # believed-blocked voxels along the velocity vector.
-            # (Supervisor itself unchanged from Phase 1.)
-            sp = float(np.linalg.norm(vehicle.vel))
-            if sp < 0.1:
-                d_clear = float("inf")
-            else:
-                d_clear = _clearance_along(vehicle.pos, vehicle.vel / sp,
-                                           marg, obs_mask, shape)
-            v_allow = _v_allow_for(d_clear)
-            v_max_eff = min(V_MAX * _sf, v_allow)
-            cbf_brake = sp > v_allow + 0.05
-
-            # D5: predictive guard on the proposed voxel.
-            d5_ok = ofix.safe_to_enter_fixes(next_v, marg, obs_mask, pos_v,
-                                             _TRACKER, _FIX1)
-            if dbg:
-                dbg.write(json.dumps({
-                    "step": step, "sub": tsu_sub, "t": round(t_sim, 2),
-                    "pos": [round(float(c), 3) for c in vehicle.pos],
-                    "vel": [round(float(c), 3) for c in vehicle.vel],
-                    "pos_v": pos_v, "next_v": next_v,
-                    "d5_ok": bool(d5_ok),
-                    "mode": s2info.get("mode"),
-                    "wp": list(s2info.get("waypoint") or []),
-                    "gfb": bool(s16p._goal_fallback),
-                    "marg_next": round(float(marg[next_v]), 3)
-                    if all(0 <= c < s for c, s in zip(next_v, shape)) else None,
-                    "obs_next": bool(obs_mask[next_v])
-                    if all(0 <= c < s for c, s in zip(next_v, shape)) else None,
-                }) + "\n")
+            # ---- Dodge layer: reactive sidestep (dynlayer graduation
+            # 2026-10-12; DodgeController unchanged from research) ----
+            # A projected lateral threat takes precedence over S2/D5 for
+            # the dodge duration: the veto cannot cover threats arriving
+            # at the drone's CURRENT position (diagnosed 071/crossing:
+            # evented t=62, confirmed t=63, collision with zero vetoes).
+            _dodge_target = None
+            if _DODGE is not None and not hover_mode:
+                _DODGE.update_active(t_sim)
+                if not _DODGE.active:
+                    _dodge_target = _DODGE.trigger(
+                        vehicle.pos, vehicle.vel, t_sim,
+                        lambda p, d: _clearance_along(
+                            p, d, marg, obs_mask, shape),
+                        lambda v: (not all(0 <= int(c) < s
+                                            for c, s in zip(v, shape))
+                                   or _blocked_believed(v, marg, obs_mask)))
+                elif _DODGE.target is not None:
+                    _dodge_target = _DODGE.target
+                # Trigger range + velocity estimate (grading
+                # diagnostics; the stack never sees threat truth).
+                if _dodge_target is not None \
+                        and _DODGE.last_threat is not None:
+                    _tpm, _tvm = _DODGE.last_threat
+                    log["dodge_trigger_range"] = float(
+                        np.linalg.norm(_tpm - vehicle.pos))
+                    log["dodge_vel_est"] = [float(x) for x in _tvm]
             _braking = False
-            use_servo = False  # Phase 2: set in the accept branch below
-            if cbf_brake:
-                # CBF supervisor: already too fast to stop within
-                # clearance -> brake now, don't execute the voxel move.
-                # Not a D5 refusal (no escape logic); normal supervision.
-                _braking = True
-                n_cbf_brakes += 1
+            use_servo = False  # set in the dodge / accept branches below
+            v_cmd = None
+            if _dodge_target is not None:
+                # Velocity servo straight to the sidestep target. The
+                # target was clearance-checked at trigger time; re-check
+                # the swept path every substep (the map updates) — a
+                # failure brakes instead of dodging into a wall.
+                _dv = np.asarray(_dodge_target, dtype=float) - vehicle.pos
+                _nd = float(np.linalg.norm(_dv))
+                if _nd < 0.25:
+                    _DODGE.finish_early(t_sim)  # arrived: end the dodge
+                    _braking = True
+                else:
+                    _d_hat = _dv / _nd
+                    _d_clear = _clearance_along(
+                        vehicle.pos, _d_hat, marg, obs_mask, shape)
+                    v_cmd = _d_hat * min(dodge_mod.SIDESTEP_SPEED,
+                                         _v_allow_for(_d_clear))
+                    _MOTION_VETO_HIT = False
+                    _dodge_swept_ok = _vel_swept_ok(
+                        vehicle.pos, v_cmd, pos_v, marg, obs_mask, shape)
+                    if not _dodge_swept_ok:
+                        if _MOTION_VETO_HIT:
+                            log["n_dodge_motion_blocks"] = \
+                                log.get("n_dodge_motion_blocks", 0) + 1
+                        else:
+                            _DODGE.n_wall_incidents += 1
+                            log["n_dodge_wall_incidents"] = \
+                                log.get("n_dodge_wall_incidents", 0) + 1
+                        _braking = True
+                    else:
+                        use_servo = True
+                        v_cmd_filt = None  # drop stale filter history
+                log["n_dodge_substeps"] = \
+                    log.get("n_dodge_substeps", 0) + 1
+            else:
+                next_v, s2info = s16p.tsu_act(
+                    pos_v, goal_v, marg, obs_mask, pos_cont=pose)
+                log["n_tsu_decisions"] += 1
+                log["total_tsu_time"] += s2info["tsu_time"]
+                _sf = float(s2info.get("speed_factor", 1.0))
+                # CBF supervisor: never outrun the stopping distance to
+                # believed-blocked voxels along the velocity vector.
+                # (Supervisor itself unchanged from Phase 1.)
+                sp = float(np.linalg.norm(vehicle.vel))
+                if sp < 0.1:
+                    d_clear = float("inf")
+                else:
+                    d_clear = _clearance_along(vehicle.pos, vehicle.vel / sp,
+                                               marg, obs_mask, shape)
+                v_allow = _v_allow_for(d_clear)
+                v_max_eff = min(V_MAX * _sf, v_allow)
+                cbf_brake = sp > v_allow + 0.05
+
+                # D5: predictive guard on the proposed voxel.
+                d5_ok = ofix.safe_to_enter_fixes(next_v, marg, obs_mask, pos_v,
+                                                 _TRACKER, _FIX1)
+                # Motion/dynamic layer: a fresh motion event at/near the
+                # proposed voxel is a mover the static map cannot see.
+                # Veto like an obstacle.
+                _motion_block = bool(
+                    d5_ok and _MOTION is not None and _MOTION.blocks(next_v))
+                if _motion_block:
+                    d5_ok = False
                 if dbg:
                     dbg.write(json.dumps({
-                        "step": step, "sub": tsu_sub, "event": "cbf_brake",
-                        "sp": round(sp, 2), "v_allow": round(v_allow, 2),
-                        "d_clear": round(d_clear, 2)}) + "\n")
-            else:
-                _refused = False
-                if not d5_ok:
-                    _refused = True
-                else:
-                    target = planner.voxel_to_pose(next_v)
-                    # ---- Phase 2: fly-through waypoints ----
-                    # Cruise: VELOCITY SERVO. Command the cruise velocity
-                    # directly — the inner velocity PID (0.73 s settle,
-                    # measured in Phase 1 tuning) tracks it with no ramp
-                    # trap. p_des = pos so the outer P term contributes
-                    # nothing; steering comes from v_cmd direction, updated
-                    # every 0.1 s by S2. (Why not a quintic with
-                    # v_end=cruise: under 10 Hz receding-horizon replanning
-                    # the min-jerk profile back-loads its acceleration —
-                    # each replan restarts the ramp and velocity never
-                    # builds. Measured: 0.03 m/s after 6 s. The servo is
-                    # the right tool for sustained cruise; the quintic is
-                    # the right tool for the terminal stop.)
-                    # Terminal: inside TERMINAL_RADIUS of the goal, quintic
-                    # to the real target with v_end=0 (Phase 1 behavior).
-                    d_goal = controller.distance(
-                        tuple(float(c) for c in vehicle.pos), goal_pose)
-                    dvec = np.asarray(target, dtype=float) - vehicle.pos
-                    nd = float(np.linalg.norm(dvec))
-                    use_servo = False
-                    seg = None
-                    v_cmd = None
-                    if d_goal < TERMINAL_RADIUS or nd < 1e-9:
-                        v_end = np.zeros(3)
-                        seg = plan_segment(vehicle.pos, vehicle.vel, target,
-                                           v_end, v_max_eff, A_PLAN)
-                    else:
-                        d_hat = dvec / nd
-                        d_clear_dec = _clearance_along(
-                            vehicle.pos, d_hat, marg, obs_mask, shape)
-                        v_allow_dec = _v_allow_for(d_clear_dec)
-                        # Phase 2b: continuous slow-for-corners + VECTOR
-                        # LOW-PASS on the velocity command. The raw command
-                        # d_hat*v_lim still jumps with S2's 10 Hz flicker;
-                        # the low-pass (TAU_CMD) attenuates that noise at
-                        # the source: flicker averages out, alternation
-                        # cancels toward hover, genuine turns track with
-                        # ~0.25 s lag. turn_scale uses the FILTERED
-                        # direction (stable, no flicker in the scale).
-                        v_raw = d_hat * max(
-                            V_MIN_CREEP,
-                            min(V_MAX * _sf, v_allow, v_allow_dec))
-                        if FILTER_TAU is None:
-                            v_cmd_filt = v_raw  # bypassed: tilt-lag-only
-                        elif v_cmd_filt is None:
-                            v_cmd_filt = v_raw
-                        else:
-                            _al = min(1.0, DT_SUB_LEN / FILTER_TAU)
-                            v_cmd_filt = v_cmd_filt + _al * (v_raw - v_cmd_filt)
-                        _spd_f = float(np.linalg.norm(v_cmd_filt))
-                        if _spd_f > 1e-9 and sp > 0.3:
-                            _dir_f = v_cmd_filt / _spd_f
-                            cos_a = float(np.dot(vehicle.vel, _dir_f) / sp)
-                            cos_a = max(-1.0, min(1.0, cos_a))
-                            turn_scale = _turn_speed_scale(
-                                math.acos(cos_a), TURN_SHARPNESS)
-                        else:
-                            turn_scale = 1.0
-                        v_cmd = v_cmd_filt * turn_scale
-                        # re-apply the creep floor after scaling (a full
-                        # reversal must not command a dead stop)
-                        _n = float(np.linalg.norm(v_cmd))
-                        if _n < V_MIN_CREEP and _n > 1e-12:
-                            v_cmd = v_cmd / _n * V_MIN_CREEP
-                        use_servo = True
-                        if dbg:
-                            dbg.write(json.dumps({
-                                "step": step, "sub": tsu_sub, "t": round(t_sim, 2),
-                                "event": "v2b_cmd",
-                                "d_hat": [round(float(c), 4) for c in d_hat],
-                                "v_cmd": [round(float(c), 4) for c in v_cmd],
-                                "turn_scale": round(float(turn_scale), 3),
-                                "sp": round(float(sp), 3),
-                            }) + "\n")
-                    # Trajectory-level D5: the swept path must be approved,
-                    # not just the endpoint (inertia makes the path matter).
-                    if use_servo:
-                        swept_ok = _vel_swept_ok(vehicle.pos, v_cmd, pos_v,
-                                                marg, obs_mask, shape)
-                    else:
-                        swept_ok = _traj_passes_d5(seg, pos_v, marg,
-                                                  obs_mask, shape)
-                    if not swept_ok:
-                        _refused = True
-                        if dbg:
-                            dbg.write(json.dumps(
-                                {"step": step, "sub": tsu_sub,
-                                 "event": "traj_refused"}) + "\n")
-                if _refused:
-                    log["n_move_refusals"] += 1
-                    s16p.notify_refusal(next_v, pos_v, marg, obs_mask)
-                    # Phase 2b: a refusal (hover/brake) is a command
-                    # boundary — drop the filter history so the first
-                    # post-hover command is obeyed promptly, not dragged
-                    # by stale pre-refusal velocity.
-                    v_cmd_filt = None
-                    if log["n_move_refusals"] > MAX_MOVE_REFUSALS_S16:
-                        log["outcome"] = "blocked"
-                        outcome_set = True
-                        break
-                    # hover: brake via velocity PID (v_sp=0 -> near
-                    # time-optimal monotonic decel).
+                        "step": step, "sub": tsu_sub, "t": round(t_sim, 2),
+                        "pos": [round(float(c), 3) for c in vehicle.pos],
+                        "vel": [round(float(c), 3) for c in vehicle.vel],
+                        "pos_v": pos_v, "next_v": next_v,
+                        "d5_ok": bool(d5_ok),
+                        "mode": s2info.get("mode"),
+                        "wp": list(s2info.get("waypoint") or []),
+                        "gfb": bool(s16p._goal_fallback),
+                        "marg_next": round(float(marg[next_v]), 3)
+                        if all(0 <= c < s for c, s in zip(next_v, shape)) else None,
+                        "obs_next": bool(obs_mask[next_v])
+                        if all(0 <= c < s for c, s in zip(next_v, shape)) else None,
+                    }) + "\n")
+                _braking = False
+                use_servo = False  # Phase 2: set in the accept branch below
+                if cbf_brake:
+                    # CBF supervisor: already too fast to stop within
+                    # clearance -> brake now, don't execute the voxel move.
+                    # Not a D5 refusal (no escape logic); normal supervision.
                     _braking = True
+                    n_cbf_brakes += 1
+                    if dbg:
+                        dbg.write(json.dumps({
+                            "step": step, "sub": tsu_sub, "event": "cbf_brake",
+                            "sp": round(sp, 2), "v_allow": round(v_allow, 2),
+                            "d_clear": round(d_clear, 2)}) + "\n")
+                else:
+                    _refused = False
+                    if not d5_ok:
+                        _refused = True
+                    else:
+                        target = planner.voxel_to_pose(next_v)
+                        # ---- Phase 2: fly-through waypoints ----
+                        # Cruise: VELOCITY SERVO. Command the cruise velocity
+                        # directly — the inner velocity PID (0.73 s settle,
+                        # measured in Phase 1 tuning) tracks it with no ramp
+                        # trap. p_des = pos so the outer P term contributes
+                        # nothing; steering comes from v_cmd direction, updated
+                        # every 0.1 s by S2. (Why not a quintic with
+                        # v_end=cruise: under 10 Hz receding-horizon replanning
+                        # the min-jerk profile back-loads its acceleration —
+                        # each replan restarts the ramp and velocity never
+                        # builds. Measured: 0.03 m/s after 6 s. The servo is
+                        # the right tool for sustained cruise; the quintic is
+                        # the right tool for the terminal stop.)
+                        # Terminal: inside TERMINAL_RADIUS of the goal, quintic
+                        # to the real target with v_end=0 (Phase 1 behavior).
+                        d_goal = controller.distance(
+                            tuple(float(c) for c in vehicle.pos), goal_pose)
+                        dvec = np.asarray(target, dtype=float) - vehicle.pos
+                        nd = float(np.linalg.norm(dvec))
+                        use_servo = False
+                        seg = None
+                        v_cmd = None
+                        if d_goal < TERMINAL_RADIUS or nd < 1e-9:
+                            v_end = np.zeros(3)
+                            seg = plan_segment(vehicle.pos, vehicle.vel, target,
+                                               v_end, v_max_eff, A_PLAN)
+                        else:
+                            d_hat = dvec / nd
+                            d_clear_dec = _clearance_along(
+                                vehicle.pos, d_hat, marg, obs_mask, shape)
+                            v_allow_dec = _v_allow_for(d_clear_dec)
+                            # Phase 2b: continuous slow-for-corners + VECTOR
+                            # LOW-PASS on the velocity command. The raw command
+                            # d_hat*v_lim still jumps with S2's 10 Hz flicker;
+                            # the low-pass (TAU_CMD) attenuates that noise at
+                            # the source: flicker averages out, alternation
+                            # cancels toward hover, genuine turns track with
+                            # ~0.25 s lag. turn_scale uses the FILTERED
+                            # direction (stable, no flicker in the scale).
+                            v_raw = d_hat * max(
+                                V_MIN_CREEP,
+                                min(V_MAX * _sf, v_allow, v_allow_dec))
+                            if FILTER_TAU is None:
+                                v_cmd_filt = v_raw  # bypassed: tilt-lag-only
+                            elif v_cmd_filt is None:
+                                v_cmd_filt = v_raw
+                            else:
+                                _al = min(1.0, DT_SUB_LEN / FILTER_TAU)
+                                v_cmd_filt = v_cmd_filt + _al * (v_raw - v_cmd_filt)
+                            _spd_f = float(np.linalg.norm(v_cmd_filt))
+                            if _spd_f > 1e-9 and sp > 0.3:
+                                _dir_f = v_cmd_filt / _spd_f
+                                cos_a = float(np.dot(vehicle.vel, _dir_f) / sp)
+                                cos_a = max(-1.0, min(1.0, cos_a))
+                                turn_scale = _turn_speed_scale(
+                                    math.acos(cos_a), TURN_SHARPNESS)
+                            else:
+                                turn_scale = 1.0
+                            v_cmd = v_cmd_filt * turn_scale
+                            # re-apply the creep floor after scaling (a full
+                            # reversal must not command a dead stop)
+                            _n = float(np.linalg.norm(v_cmd))
+                            if _n < V_MIN_CREEP and _n > 1e-12:
+                                v_cmd = v_cmd / _n * V_MIN_CREEP
+                            use_servo = True
+                            if dbg:
+                                dbg.write(json.dumps({
+                                    "step": step, "sub": tsu_sub, "t": round(t_sim, 2),
+                                    "event": "v2b_cmd",
+                                    "d_hat": [round(float(c), 4) for c in d_hat],
+                                    "v_cmd": [round(float(c), 4) for c in v_cmd],
+                                    "turn_scale": round(float(turn_scale), 3),
+                                    "sp": round(float(sp), 3),
+                                }) + "\n")
+                        # Trajectory-level D5: the swept path must be approved,
+                        # not just the endpoint (inertia makes the path matter).
+                        _MOTION_VETO_HIT = False
+                        if use_servo:
+                            swept_ok = _vel_swept_ok(vehicle.pos, v_cmd, pos_v,
+                                                    marg, obs_mask, shape)
+                        else:
+                            swept_ok = _traj_passes_d5(seg, pos_v, marg,
+                                                      obs_mask, shape)
+                        if not swept_ok:
+                            _refused = True
+                            if dbg:
+                                dbg.write(json.dumps(
+                                    {"step": step, "sub": tsu_sub,
+                                     "event": "traj_refused"}) + "\n")
+                    if _refused:
+                        _is_motion = bool(_motion_block or _MOTION_VETO_HIT)
+                        if _is_motion:
+                            # Motion veto = "wait for the transient threat",
+                            # not "the planner is stuck". It must not burn
+                            # the static stuck-budget (that would punish
+                            # correct waiting); the mission timeout is the
+                            # backstop.
+                            log["n_motion_refusals"] = \
+                                log.get("n_motion_refusals", 0) + 1
+                        else:
+                            log["n_move_refusals"] += 1
+                        s16p.notify_refusal(next_v, pos_v, marg, obs_mask)
+                        # Phase 2b: a refusal (hover/brake) is a command
+                        # boundary — drop the filter history so the first
+                        # post-hover command is obeyed promptly, not dragged
+                        # by stale pre-refusal velocity.
+                        v_cmd_filt = None
+                        if log["n_move_refusals"] > MAX_MOVE_REFUSALS_S16:
+                            log["outcome"] = "blocked"
+                            outcome_set = True
+                            break
+                        # hover: brake via velocity PID (v_sp=0 -> near
+                        # time-optimal monotonic decel).
+                        _braking = True
             # (accept case: seg already planned above)
 
             # execute 0.1 s at 100 Hz
@@ -1222,7 +1375,11 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
                 t_seg += DT
                 t_sim += DT
                 inner_tick += 1
-                if _segment_hits_occ(p_prev, vehicle.pos, occ):
+                if _movers is not None:
+                    _md = _movers.min_dist(vehicle.pos, t_sim)
+                    if _md < log_mover_min_dist:
+                        log_mover_min_dist = _md
+                if _segment_hits_occ(p_prev, vehicle.pos, occ_dyn):
                     v = planner.pose_to_voxel(
                         tuple(float(c) for c in vehicle.pos), shape) \
                         if all(0 <= int(c) < s for c, s in
@@ -1351,6 +1508,60 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     row["fix_stale"] = int(_FIX4)
     row["n_hover_scans"] = log.get("n_hover_scans", 0)
     row["vis_min"] = round(log.get("vis_min", 1.0), 3)
+    row["sim_time"] = log["sim_time"]  # RT-2 S7 fix: manifest_row never
+    # emits sim_time; the research sweep's sim_time_s column read it and
+    # was -1 in all 152 v3 rows. Emitted here so TN CSVs carry it live.
+    # ---- Dynamic obstacles (movers.py, dynlayer graduation) ----
+    _m0 = (_mspec or [{}])[0]
+    row["mover_geometry"] = _m0.get("geometry", "") \
+        if _movers is not None else ""
+    row["mover_speed"] = round(_m0.get("speed", 0.0), 2) \
+        if _movers is not None else 0.0
+    _mv = _m0.get("v", None) if _movers is not None else None
+    row["mover_vel_xyz"] = ",".join(f"{x:.3f}" for x in _mv) \
+        if _mv is not None else ""
+    row["mover_min_dist"] = round(log_mover_min_dist, 2) \
+        if _movers is not None else -1.0
+    row["mover_cross_t"] = round(_m0.get("t_cross", -1.0), 2) \
+        if _movers is not None else -1.0
+    # ---- Motion / dynamic layer (dynlayer graduation 2026-10-12) ----
+    row["motion_layer"] = int(_MOTION is not None)
+    row["n_motion_refusals"] = log.get("n_motion_refusals", 0)
+    row["n_motion_events"] = _MOTION.n_events_total \
+        if _MOTION is not None else 0
+    # NOTE: when dyn_layer is on, n_motion_events counts union
+    # appearances and n_motion_confirmed counts confirmed TRACKS
+    # (MotionBuffer counted confirmed voxels — different unit).
+    row["n_motion_confirmed"] = _MOTION.n_confirmed_total \
+        if _MOTION is not None else 0
+    row["dodge_trigger_range"] = round(
+        log.get("dodge_trigger_range", -1.0), 2)
+    _dve = log.get("dodge_vel_est", None)
+    row["dodge_vel_est"] = ",".join(f"{x:.3f}" for x in _dve) \
+        if _dve is not None else ""
+    row["dodge_layer"] = int(_DODGE is not None)
+    row["n_dodges"] = _DODGE.n_dodges if _DODGE is not None else 0
+    row["n_dodge_fallbacks"] = _DODGE.n_fallbacks \
+        if _DODGE is not None else 0
+    row["n_dodge_wall_incidents"] = _DODGE.n_wall_incidents \
+        if _DODGE is not None else 0
+    row["n_dodge_motion_blocks"] = log.get("n_dodge_motion_blocks", 0)
+    row["n_dodge_substeps"] = log.get("n_dodge_substeps", 0)
+    row["dyn_layer"] = int(isinstance(_MOTION, dynlayer_mod.DynLayer))
+    row["n_dyn_prev_events"] = _MOTION.n_prev_events \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
+    row["n_dyn_map_events"] = _MOTION.n_map_events \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
+    # F5 (research red-team): lifetime count; the end-of-mission
+    # snapshot survives under its own honest name.
+    row["n_dyn_tracks_confirmed"] = _MOTION.n_confirmed_total \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
+    row["n_dyn_tracks_active_end"] = _MOTION.n_tracks_confirmed \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
+    row["n_dyn_tracks_full"] = _MOTION.n_full_total \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
+    row["n_dyn_wall_promoted"] = _MOTION.n_wall_promoted \
+        if isinstance(_MOTION, dynlayer_mod.DynLayer) else 0
     # ---- Escalation layer (Option A, industry mirror) ----
     row["esc_enabled"] = int(_ESCALATION is not None)
     row["esc_final_action"] = esc_mod.ACTION_NAMES[log.get("esc_max_sev", 0)]
@@ -1431,6 +1642,15 @@ MANIFEST_FIELDS_V5 = MANIFEST_FIELDS_V4 + ["fix_atten_d5", "fix_confirm",
     "esc_rth_gated", "esc_land_vetoed",
     "nav_enabled", "nav_final_health", "nav_untrusted_scans",
     "nav_degraded_scans", "nav_freeze_from_step"]
+MANIFEST_FIELDS_V6 = MANIFEST_FIELDS_V5 + [
+    "mover_geometry", "mover_speed", "mover_vel_xyz", "mover_min_dist",
+    "mover_cross_t", "motion_layer", "n_motion_refusals",
+    "n_motion_events", "n_motion_confirmed", "dodge_trigger_range",
+    "dodge_vel_est", "dodge_layer", "n_dodges", "n_dodge_fallbacks",
+    "n_dodge_wall_incidents", "n_dodge_motion_blocks", "n_dodge_substeps",
+    "dyn_layer", "n_dyn_prev_events", "n_dyn_map_events",
+    "n_dyn_tracks_confirmed", "n_dyn_tracks_active_end",
+    "n_dyn_tracks_full", "n_dyn_wall_promoted", "sim_time"]
 
 
 def main():
