@@ -62,6 +62,23 @@ provenance-guarded: they abort on a dirty tree and stamp the
 executed commit into `nav_health_calibration.csv` /
 `nav_health_mission_validation.csv`).
 
+`dynlayer.py` + `test_dynlayer.py` (11 tests) + `motion.py` +
+`movers.py` + `dodge.py` + `DYNLayer_RESULTS.md` — the dynamic-object
+layer (graduated 2026-10-12, after red-team round 2 PASS WITH
+CAVEATS): previous-scan differencing + accumulated-map appearances,
+CV tracks with tiered authority (2 hits veto, 3rd full/dodge), F1
+wall-candidate chains, projected-tube `blocks()`. Wired into
+`mission_dynamics_v5.py`'s `_MOTION` slot as the MotionBuffer
+successor (`cfg["dyn_layer"]`, DodgeController on top via
+`cfg["dodge_layer"]`; movers staged via `cfg["movers"]`). Run
+`python3 run_dynlayer_sweep.py off|on` then `merge` for the paired
+48-cell validation (104 rows in `dynlayer_sweep.csv`, executed at
+the graduation code commit: OFF 43/48 → ON 7/48, 36 fixed /
+0 broken, 0 mismatched rows vs the research sweep). Scope
+boundaries (open-room wall-lane blindness, 3-paint phantom bound,
+131 dodge-geometry) are recorded in `DYNLayer_RESULTS.md` and
+travel with the layer.
+
 `slam_test.py`, `slam_obscurant.py`, `sampler_tracking_test.py`,
 `tune_pid.py`, `tune_turn.py`, `analyze_*.py`, `turn_metrics.py` — analysis and
 tuning experiments. They run, but they are not the validated path.

@@ -376,3 +376,114 @@ itself, not detection.
 4. **131 head-on v0.5 (v2-relative regression).** Detected and
    dodged, still collided — instrument whether the dodge fired
    late, into the mover's line, or was vetoed mid-execution.
+
+## ThermoNav graduation record (2026-10-12)
+
+Ported from thermo-work `muse/roadmap-movers-2026-10-11` @
+`30e2746` (the RT-2-corrected doc above travels verbatim; research
+code commit `a658150`, results commit `44befad`, RT-2 report
+`DYNLayer_REDTEAM2.md` on `muse/roadmap-moversrt2-2026-10-11` @
+`8c3929e`, verdict PASS WITH CAVEATS — Phase 2(a) closable pending
+graduation). **Claim label unchanged: Z1-legal formulation,
+validated in simulation only** (host-side classical layer; no
+TSU/Z1 surface, no silicon claim).
+
+**What was ported.** `dynlayer.py` + `test_dynlayer.py` verbatim;
+support modules `movers.py`, `motion.py`, `dodge.py` verbatim
+(DodgeController unchanged); `DynLayer` wired into
+`mission_dynamics_v5.py`'s `_MOTION` slot as the MotionBuffer
+successor (cfg `dyn_layer` takes precedence over `motion_layer`,
+same `_MOTION` interface; `DodgeController` on top via
+`dodge_layer`). Wiring points, same as research: layer update on
+the raw scan before Gibbs; dodge `observe` at 1 Hz; motion veto
+in the D5 check and in both swept-path checks (`_vel_swept_ok` /
+`_traj_passes_d5`, flagged via `_MOTION_VETO_HIT`); motion
+refusals counted separately and exempt from the static stuck
+budget; movers rendered into the scan GT at 1 Hz and the
+collision GT at 10 Hz; mover/motion/dodge/dyn manifest rows.
+ThermoNav divergences preserved: DISARM, battery, and nav-health
+wiring untouched (decider kernel untouched); the PID cmd channel
+still goes through `_pid_issue`; the escalation call still
+receives battery/nav inputs. `sim_time` is now emitted as a
+manifest row — the RT-2 §7 dead-column fix applied at the source
+on this side (research CSVs were not rewritten).
+
+**Not ported (documented, not silent).** (a) The research
+`fpwide` / `fresh` sets (12 wide-seed no-mover + 12 red-team
+fresh paired cells): the TN validation below covers the FP tax
+on the 4 protocol baselines; the wider-seed false-dodge bound
+(2/24 clean missions combined with RT-2's extension) remains a
+research-side number, cited in SCOPE BOUNDARIES (ii). (b) The
+threat-analytic continuous-sphere overlay and the jitter
+controller: ThermoNav has no jitter controller (pre-existing,
+documented in prior graduations; `map_age` stays 0.0) and the
+dynlayer protocol uses voxelized movers, so neither is needed
+for this validation. (c) RT-2's lane/hug instrumented probes
+(U6, `rt2_lane`) remain research-side evidence; their findings
+travel as SCOPE BOUNDARIES (i).
+
+**TN-side validation (executed commit `851908e`, ThermoNav code
+commit of this graduation; script `run_dynlayer_sweep.py`,
+per-arm shards `dynlayer_sweep_off.csv` / `dynlayer_sweep_on.csv`
+merged into `dynlayer_sweep.csv`, 104 rows, provenance verified
+with `exec_provenance` begin/finish + `verify_csv_commit`).**
+The FULL 48-cell paired set ran on ThermoNav — no subset was
+needed. Staging trajectories are ThermoNav-native
+(`sim/traj_fix/dyn_baseline_*.json`, flown by this loop, 4/4
+success, committed as staging inputs) because the TN loop has
+diverged from the research loop; despite the divergence the
+results match the research sweep **exactly**:
+
+- OFF (no layer): **43/48 collisions** — the blindness pattern
+  reproduces on TN's loop.
+- ON (dynlayer + dodge): **7/48 collisions; 36 fixed / 0 broken**
+  vs OFF. Breakdowns identical to research: crossing 1/16,
+  head-on 4/16, overtake 2/16; by speed 2/1/1/3 of 12; by room
+  004 0/12, 071 0/12, 128 4/12, 131 3/12.
+- **0 mismatched rows** vs the research `dynlayer_sweep.csv`
+  across 104 rows on 18 compared fields (outcome, collision,
+  mover_min_dist, move/motion refusals, motion events/confirmed,
+  all dyn counters, dodges/fallbacks/wall incidents/motion
+  blocks/substeps). Mean appearances 35.2 (15.3 prev + 15.8
+  map); 22 dodges, 1 fallback, 0 wall incidents; ON successes
+  41/48.
+- The RT-2 relabeled cell reproduces: 071 head-on v1.0 ON =
+  `max_steps`, 469 motion refusals, min-dist 0.98 m (FP-driven
+  starvation with incidental closest approach — not an
+  avoidance). ON baseline tax identical to research: 41 (004),
+  274 (071), 1 (128), 0 (131); all 4 ON baselines succeed,
+  0 dodges.
+- `sim_time_s` is live in every TN row (min 8.75 s) — contrast
+  the research dead column (−1 in all 152 rows, RT-2 §7).
+
+**Unit + regression (all on the wired tree).** `test_dynlayer.py`:
+11/11 PASS. Existing suites unregressed: `test_escalation.py`
+ALL PASS (incl. DISARM live-mission + stale-LAND hazard);
+`test_link_health.py` 25/25; `test_battery.py` +
+`test_battery_safety.py` ALL PASS; `test_nav_health.py` ALL
+PASS; `test_exec_provenance.py` ALL PASS;
+`test_nav_checkpoint.py` ALL PASS. Battery safety validation
+re-run at `851908e`: **6/6 gates PASS, 0 collisions**, every
+behavioral field identical to the graduation record (RTB landed
+0.0693; whiteout `landed_disarmed` 0.0675 with 67 countdown
+vetoes; RTC landed 0.0142 / 0.0134); its CSVs are re-stamped
+`851908e` (calibration: 356/356 differing rows are the commit
+stamp only; validation: stamp + wall-times, plus `sim_time_s`
+now live instead of −1 from the same source fix above).
+
+**Caveats carried into ThermoNav.** The SCOPE BOUNDARIES above
+travel with this layer, verbatim in substance: (i) open-room
+wall-lane huggers remain blind (parked card
+`dynlayer-wall-lane-blindness.md`); idealized sub-band huggers
+(≤0.35 m/s) blind at unit level, corridor huggers at 0.2 m/s
+detected via voxel churn; (ii) tiered authority's bound is 3
+consistent paints → a full-authority phantom exists (false
+dodges 2/24 clean missions combined, both chain-born phantoms
+marching 1.1–1.5 m/s along linear features; voxel-persistence is
+the open discriminator, parked); (iii) 131 head-on v0.5 is
+dodge-geometry + no-retreat (dodge moved the drone into the
+mover's line, veto pinned it; tiering exonerated; a track now
+exists so the parked retreat card's premise is satisfiable).
+The README's "blind to walking-speed movers" line is superseded
+by this graduation for the staged protocol — the residual
+blindness is the scope boundaries, not the original 43/48.
