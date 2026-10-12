@@ -980,6 +980,22 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             if not _verified \
                     and pose[2] <= esc_mod.LAND_CREEP_ALT_M:
                 _land_rate = esc_mod.LAND_CREEP_RATE
+            if _land_terminal:
+                # Terminal descent profile (whiteout fix round, ported
+                # 2026-10-12): no creep — creep buys guard scans, and
+                # the terminal landing bypasses the guard by design, so
+                # creep was pure energy cost (measured in research:
+                # 22 vs 17 steps from 8.5 m). Emergency rate when the
+                # safety layer armed it (terminal start below the
+                # reserve-required soc; battery_safety envelope,
+                # Tier B). TN loop has no jitter controller; that
+                # divergence does not affect this profile.
+                _land_rate = (
+                    bsafe_mod.EMERGENCY_TERMINAL_DESCENT_RATE_MPS
+                    if _sinfo.get("emergency_descent")
+                    else bsafe_mod.TERMINAL_DESCENT_RATE_MPS)
+                log["safety_emergency_descent"] = int(
+                    bool(_sinfo.get("emergency_descent")))
             # Battery-critical forced landing: at soc <= CRITICAL the
             # alternative to descending is hovering until the pack is
             # empty and dropping uncontrolled — the industry
@@ -1611,6 +1627,8 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     row["safety_n_abort_down"] = _SAFETY.n_abort_down \
         if _SAFETY is not None else 0
     row["safety_terminal_steps"] = log.get("safety_terminal_steps", 0)
+    row["safety_emergency_descent"] = log.get(
+        "safety_emergency_descent", 0)
     row["safety_arrived_steps"] = log.get("safety_arrived", 0)
     row["safety_return_legs"] = log.get("safety_return_legs", 0)
     row["safety_checkpoint"] = ",".join(

@@ -53,27 +53,177 @@ def test_meter_measures_hover_draw():
 
 def test_countdown_sized_from_measured_rate():
     # Two controllers, same flag soc, drain rates differing 2x via the
-    # MEASURED soc channel: countdown must halve — proof the sizing
-    # reads the measurement, not a fixed model percentage.
-    cds = []
+    # MEASURED soc channel. With the descent reserve priced in
+    # (whiteout fix), the sizing must match the formula exactly:
+    # countdown = (soc_at_sizing - CRITICAL)/rate - descent_duration,
+    # where descent_duration = altitude / 0.5 m/s = 16 s at z=8.
+    # (The pre-fix "countdown halves when rate doubles" no longer
+    # holds exactly: the reserve is rate*duration, so the countdown
+    # is the reserve-band time MINUS a rate-independent duration.)
     for rate in (0.001, 0.002):
         c = bs.BatterySafetyController((0.0, 0.0, 8.0))
         soc = lambda k, r=rate: 0.30 - r * k  # noqa: E731
-        # fly above reserve until the meter is ready, then cross it
-        _feed(c, 0, 99, soc)
-        a, info = None, None
-        for k in range(100, 140):
+        soc_at_size = None
+        for k in range(0, 200):
             c.observe(float(k), soc(k), 0.08 * k, (0.0, 0.0, 8.0), True)
             a, info = c.step(float(k), soc(k), (0.0, 0.0, 8.0))
             if c.countdown_s is not None:
+                soc_at_size = soc(k)
                 break
         assert c.flag_fired and c.countdown_s is not None, info
-        cds.append(c.countdown_s)
-    assert abs(cds[0] / cds[1] - 2.0) < 0.35, cds
-    # And the slow-drain countdown matches (flag_soc-CRITICAL)/rate
-    assert abs(cds[0] - (0.20 - CRITICAL_SOC) / 0.001) < 25.0, cds
-    print(f"countdown from measured rate: {cds[0]:.0f}s @0.001/s vs "
-          f"{cds[1]:.0f}s @0.002/s (ratio ~2)")
+        expected = (soc_at_size - CRITICAL_SOC) / rate - 16.0
+        assert abs(c.countdown_s - expected) < 2.0, (
+            c.countdown_s, expected, rate)
+        print(f"countdown from measured rate @{rate}/s: "
+              f"{c.countdown_s:.0f}s (formula {expected:.0f}s incl. "
+              f"16s descent reserve)")
+
+
+def test_descent_reserve_and_envelope_boundaries():
+    # Whiteout fix: reserve = measured rate x expected duration;
+    # Tier A bound = CRITICAL + reserve (normal rate); Tier B bound
+    # RE-STATED in fix round 2 (RT round 2 measured the round-1
+    # flag-fire pricing false in the bottom of the band): primary
+    # form on TERMINAL-START soc, r * whole descent steps; flag-fire
+    # form adds the metering-hold allowance.
+    c = bs.BatterySafetyController((0.0, 0.0, 8.5))
+    pose = (0.0, 0.0, 8.5)
+    r = 0.0045  # saturated drain, soc/s (RT-measured band)
+    assert abs(c.descent_duration_s(pose) - 17.0) < 1e-9
+    assert abs(c.descent_duration_s(pose, emergency=True) - 8.5) < 1e-9
+    assert abs(c.descent_reserve_soc(pose, r) - 0.0765) < 1e-9
+    assert abs(c.required_terminal_start_soc(pose, r)
+               - (CRITICAL_SOC + 0.0765)) < 1e-9
+    # Step granularity: 8.5 m at 1.0 m/s is spent as 9 whole 1 s
+    # steps (measured, RT round 2); whole altitudes stay whole.
+    assert c.tier_b_descent_steps(pose) == 9
+    assert c.tier_b_descent_steps((0.0, 0.0, 9.0)) == 9
+    assert c.tier_b_descent_steps((0.0, 0.0, 8.0)) == 8
+    assert c.tier_b_descent_steps((0.0, 0.0, 0.4)) == 1
+    # Terminal-start bound: r * 9 steps (the round-1 continuous
+    # form was r * 8.5 = 0.03825 — underpriced by half a step
+    # before the hold is even counted).
+    assert abs(c.min_terminal_start_soc_tier_b(pose, r)
+               - 0.0045 * 9) < 1e-9
+    # Flag-fire form on a fresh controller (flag not fired -> the
+    # worst-case metering hold is priced): + r * METER_MIN_SPAN_S.
+    assert abs(c.min_flag_soc_tier_b(pose, r)
+               - (0.0045 * 9 + 0.0045 * bs.METER_MIN_SPAN_S)) < 1e-9
+    # The RT sub-CRITICAL case (flag soc 0.09, z 8.5, saturated):
+    # below Tier A, above Tier B -> emergency guarantee band.
+    assert c.min_flag_soc_tier_b(pose, r) <= 0.09 \
+        < c.required_terminal_start_soc(pose, r)
+    print("envelope: Tier A >= 0.1765, Tier B terminal-start >= "
+          "0.0405 / flag-fire >= 0.0495 at z=8.5, r=0.0045; RT "
+          "subcrit 0.09 sits in Tier B")
+
+
+def test_tier_b_bound_rt2_regression():
+    # Fix round 2 regression for the RT round-2 break, at RT2's own
+    # measured numbers (tierb_044, seeds 0/1/2 identical): flag soc
+    # 0.03976, sizing-time r = 0.0042329, terminal start 0.03130,
+    # z = 8.5. The round-1 bound (0.0359) wrongly put it INSIDE
+    # Tier B with a predicted touchdown >= 0.0039; it touched down
+    # at soc 0.0. The re-stated bounds must put it OUTSIDE (no
+    # claim), and must put tierb_052 (flag 0.04775, r = 0.0042462,
+    # terminal start 0.03926, landed 0.0056) INSIDE with a
+    # prediction the measured touchdown beats.
+    pose = (12.5, 19.5, 8.5)
+    c = bs.BatterySafetyController((12.5, 19.5, 0.0))
+    r44, flag44, term44 = 0.0042329, 0.03976, 0.03130
+    assert c.min_flag_soc_tier_b(pose, r44) > flag44
+    assert c.min_terminal_start_soc_tier_b(pose, r44) > term44
+    r52, flag52, term52 = 0.0042462, 0.04775, 0.03926
+    assert c.min_flag_soc_tier_b(pose, r52) <= flag52
+    assert c.min_terminal_start_soc_tier_b(pose, r52) <= term52
+    pred52 = term52 - c.min_terminal_start_soc_tier_b(pose, r52)
+    assert 0.0 < pred52 <= 0.0056, pred52
+    print("tier B restated bound: tierb_044 outside (no claim), "
+          "tierb_052 inside with predicted floor "
+          f"{pred52:.4f} <= measured 0.0056")
+
+
+def test_tier_b_hold_allowance_meter_ready():
+    # Fix round 2: the hold allowance is priced only when the flag
+    # fires with no usable meter window. An in-flight flag fire
+    # (meter window long since filled) prices hold = 0, so the
+    # flag-fire and terminal-start bounds coincide.
+    c = bs.BatterySafetyController((0.0, 0.0, 8.5))
+    pose = (0.0, 0.0, 8.5)
+    wh = 0.0
+    for k in range(60):
+        soc = 0.30 - 0.0045 * k  # crosses RESERVE 0.20 at k=23
+        wh += 0.35
+        c.observe(float(k), soc, wh, pose, False)
+        c.step(float(k), soc, pose)
+        if c.flag_fired:
+            break
+    assert c.flag_fired and c.meter_ready_at_flag
+    r = c.meter.drain_rate_soc_per_s()
+    assert c.tier_b_hold_allowance_soc(r) == 0.0
+    assert abs(c.min_flag_soc_tier_b(pose, r)
+               - c.min_terminal_start_soc_tier_b(pose, r)) < 1e-12
+    # And the scripted-start case: flag on the very first step,
+    # meter empty -> not ready at flag, full hold priced.
+    c2 = bs.BatterySafetyController((0.0, 0.0, 8.5))
+    c2.observe(0.0, 0.044, 0.0, pose, False)
+    c2.step(0.0, 0.044, pose)
+    assert c2.flag_fired and not c2.meter_ready_at_flag
+    assert abs(c2.tier_b_hold_allowance_soc(0.0045)
+               - 0.0045 * bs.METER_MIN_SPAN_S) < 1e-12
+    print("tier B hold allowance: 0 for in-flight flag fire, "
+          "r*METER_MIN_SPAN_S for scripted start")
+
+
+def test_subcritical_flag_arms_emergency_descent():
+    # Whiteout fix 2a: flag fires already below CRITICAL (soc 0.09
+    # trajectory), countdown is 0, terminal is immediate AND the
+    # emergency descent rate is armed with the event logged.
+    c = bs.BatterySafetyController((0.0, 0.0, 8.5))
+    pose = (0.0, 0.0, 8.5)
+    wh = 0.0
+    action = None
+    for k in range(30):
+        soc = 0.13 - 0.0045 * k
+        wh += 0.35
+        c.observe(float(k), soc, wh, pose, False)
+        action, info = c.step(float(k), soc, pose)
+        if action == bs.LAND_TERMINAL:
+            break
+    assert action == bs.LAND_TERMINAL, (action, c.events)
+    assert c.countdown_s == 0.0, c.countdown_s
+    assert c.emergency_descent, c.events
+    assert info["terminal_descent_rate_mps"] == \
+        bs.EMERGENCY_TERMINAL_DESCENT_RATE_MPS
+    assert any(e[1] == "emergency_terminal_descent" for e in c.events)
+    print("sub-CRITICAL flag: countdown 0, terminal immediate, "
+          "emergency descent armed at 1.0 m/s")
+
+
+def test_granularity_dip_does_not_arm_emergency():
+    # A normally-sized countdown end starts the descent up to ~1
+    # step of drain below the required soc; that dip must NOT arm
+    # the emergency rate (found in the first fix-round validation
+    # run, where Tier A landings flew the emergency profile).
+    c, a, _ = _ctrl_at_flag((5.0, 0.0, 8.0), rate=0.001)
+    req = c.required_terminal_start_soc((5.0, 0.0, 8.0), 0.001)
+    a, info = c.step(c.countdown_end_t + 1.0, req - 0.0005,
+                     (5.0, 0.0, 8.0))
+    assert a == bs.LAND_TERMINAL and not c.emergency_descent, c.events
+    print("granularity dip (0.5 steps of drain below required): "
+          "normal rate kept")
+
+
+def test_reserve_covered_terminal_is_normal_rate():
+    # A terminal start at/above the reserve-required soc must NOT
+    # arm the emergency rate.
+    c, a, _ = _ctrl_at_flag((5.0, 0.0, 8.0), rate=0.001)
+    a, info = c.step(c.countdown_end_t + 1.0, 0.15, (5.0, 0.0, 8.0))
+    assert a == bs.LAND_TERMINAL
+    assert not c.emergency_descent, c.events
+    assert info["terminal_descent_rate_mps"] == \
+        bs.TERMINAL_DESCENT_RATE_MPS
+    print("reserve-covered terminal: normal 0.5 m/s rate, no emergency")
 
 
 def test_checkpoint_refresh_and_freeze():
@@ -140,29 +290,33 @@ def test_cascade_land_when_neither_affordable():
 
 
 def test_midleg_abort_down_only():
-    # Start an RTB leg 20 m from base at gentle drain (affordable).
-    c, a, _ = _ctrl_at_flag((20.0, 0.0, 8.0), rate=0.001)
+    # Start an RTB leg 40 m from base at gentle drain (affordable).
+    # (Geometry widened in the whiteout fix round: at 20 m the
+    # reserve-required terminal start — soc <= CRITICAL + reserve —
+    # is now reached at about the same spiked rate as the abort
+    # threshold, and the countdown-end terminal legitimately
+    # preempts the abort re-check, since terminal outranks the
+    # cascade inside its own window. At 40 m the leg goes
+    # unaffordable well before the reserve start is reached, which
+    # isolates the abort-down mechanism this test is about.)
+    c, a, _ = _ctrl_at_flag((40.0, 0.0, 8.0), rate=0.001)
     assert c.rung == bs.RTB
-    pose = (20.0, 0.0, 8.0)
+    pose = (40.0, 0.0, 8.0)
     soc = c.flag_soc
     # Measured drain worsens 10x mid-leg (load spike in the telemetry):
-    # after the meter window refills, RTB must abort DOWN. The frozen
-    # checkpoint sits at (10,0,8), 10 m away — also unaffordable at
-    # the spiked rate given the floor, so the cascade lands.
+    # after the meter window refills, RTB must abort DOWN.
     wh = c.meter.samples[-1][2]
     t = int(c.meter.samples[-1][0])
-    actions = []
     for k in range(1, 30):
         t += 1
         soc -= 0.010
         wh += 0.8
         c.observe(float(t), max(soc, 0.11), wh, pose, False)
         a, info = c.step(float(t), max(soc, 0.11), pose)
-        actions.append(a)
-        if a == bs.LAND_IN_PLACE:
+        if c.n_abort_down >= 1:
             break
     assert c.n_abort_down >= 1, c.events
-    assert a == bs.LAND_IN_PLACE, actions
+    assert bs._RUNG_ORDER[c.rung] > bs._RUNG_ORDER[bs.RTB], c.rung
     assert any(e[1] == "cascade_abort_down" for e in c.events)
     # Never up: drive it again with improving numbers — rung stays.
     a2, _ = c.step(float(t + 1), max(soc, 0.11), pose)
@@ -250,8 +404,11 @@ def test_hold_metering_bounded_flat_soc_screaming_wh():
     # is ready (a few steps), NOT after hundreds of hold steps.
     assert n_hold <= 5, (n_hold, actions[:12])
     # Sized from the Wh channel: 10 Wh/s over a 74 Wh pack implies
-    # ~0.135 soc/s, so the countdown is short and terminal follows.
-    assert c.countdown_s is not None and 0.0 < c.countdown_s < 5.0, \
+    # ~0.135 soc/s; with the descent reserve priced in (whiteout
+    # fix: reserve = 0.135 x 16 s = 2.16 soc at z=8) the countdown
+    # is 0.0 and terminal is immediate — the honest answer at that
+    # drain, not a short countdown to CRITICAL.
+    assert c.countdown_s is not None and c.countdown_s == 0.0, \
         c.countdown_s
     assert terminal_t is not None and terminal_t <= 30, terminal_t
     print(f"RT2-1 disagreement: hold ended after {n_hold} steps, "
@@ -294,6 +451,12 @@ if __name__ == "__main__":
     test_countdown_end_is_terminal()
     test_countdown_resizes_earlier_on_drain_spike()
     test_calibration_log_rows()
+    test_descent_reserve_and_envelope_boundaries()
+    test_tier_b_bound_rt2_regression()
+    test_tier_b_hold_allowance_meter_ready()
+    test_subcritical_flag_arms_emergency_descent()
+    test_granularity_dip_does_not_arm_emergency()
+    test_reserve_covered_terminal_is_normal_rate()
     test_hold_metering_bounded_flat_soc_screaming_wh()
     test_hold_metering_bound_both_channels_dead()
     print("ALL BATTERY-SAFETY TESTS PASS")
