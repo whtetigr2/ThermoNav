@@ -31,17 +31,25 @@ the escalation policy's link rows. Run `python3 test_link_health.py`
 ported; the layer is exercised at tracker + policy level here.
 
 `battery.py` + `battery_safety.py` + `test_battery.py` (14 tests) +
-`test_battery_safety.py` (12 tests) + `BATTERY_MODEL.md` — the battery
+`test_battery_safety.py` (18 tests) + `BATTERY_MODEL.md` — the battery
 layer (graduated 2026-10-11): pack gauge, the escalation policy's battery
 rows, and Paul's safety cascade (measured-draw countdown, RTB/RTC/land),
 wired into `mission_dynamics_v5.py` (`cfg["battery"]` /
 `cfg["battery_safety"]`, off by default; the checkpoint's nav-trust
 input is the real NavHealthMonitor by default since the nav-health
 graduation — see below — with the explicit `nav_trustworthy_stub`
-kept only as a scripted scenario override). Run
+kept only as a scripted scenario override). Whiteout update
+(2026-10-12): the countdown now prices a descent reserve, the
+terminal descent flies flat 0.5 m/s (emergency 1.0 m/s below the
+reserve-required start), and the guarantee is stated as a two-tier
+envelope (Tier A ~CRITICAL touchdown / Tier B soc > 0, terminal-start
+form) — see `BATTERY_MODEL.md`. Run
 `python3 run_battery_safety_validation.py` for the 9-mission safety
-validation (6/6 gates at graduation; writes
-`battery_safety_validation.csv` + `battery_safety_calibration.csv`).
+validation (6/6 gates at the whiteout graduation, executed
+`018c841`; writes `battery_safety_validation.csv` +
+`battery_safety_calibration.csv`), and
+`python3 run_whiteout_tierb_spotcheck.py` for the TN-side Tier B
+sub-CRITICAL spot check (writes `whiteout_tierb_spotcheck.csv`).
 
 `nav_health.py` + `exec_provenance.py` + `test_nav_health.py`
 (24 tests) + `test_exec_provenance.py` (7 tests) +
