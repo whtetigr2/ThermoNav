@@ -8,6 +8,17 @@ mode you document is a failure mode you understand.
 Nothing here ran on Z1 silicon or a real aircraft. Every number carries its
 provenance (measured / calculated / assumed).
 
+> **Specular caveat (2026-10-12):** The simulation mission-success and
+> map-fidelity claims in this record are **DIFFUSE-SENSING ONLY**. Under a
+> specular-reflection sensor model (research Phase 3(b), RT-verified),
+> long-route missions fail by map erasure at specular fractions ≥ ~0.1 of
+> wall voxels with 50% engagement, via lost returns carving real structure
+> free — an interaction with the stack's no-return-carves-free inverse
+> model. Full record: research repo `slow-drone/dynamics_sim/SPECULAR.md`
+> (branch `muse/roadmap-specular-2026-10-11`) and `SPECULAR_RT.md`
+> (branch `muse/roadmap-specularrt-2026-10-11`). No numbers in this
+> document were changed by this annotation.
+
 ---
 
 ## Shipped

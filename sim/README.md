@@ -4,6 +4,17 @@ Point-mass + approximate-attitude flight simulation (software-in-the-loop only �
 not a validated aircraft). Phases 1–4: inertia fixes, obscurants, gravity/wind/
 thrust-lag, and the safety-fix stack.
 
+> **Specular caveat (2026-10-12):** The simulation mission-success and
+> map-fidelity claims in this suite are **DIFFUSE-SENSING ONLY**. Under a
+> specular-reflection sensor model (research Phase 3(b), RT-verified),
+> long-route missions fail by map erasure at specular fractions ≥ ~0.1 of
+> wall voxels with 50% engagement, via lost returns carving real structure
+> free — an interaction with the stack's no-return-carves-free inverse
+> model. Full record: research repo `slow-drone/dynamics_sim/SPECULAR.md`
+> (branch `muse/roadmap-specular-2026-10-11`) and `SPECULAR_RT.md`
+> (branch `muse/roadmap-specularrt-2026-10-11`). No numbers in this
+> document were changed by this annotation.
+
 ## Entry points (current — use these)
 
 - `mission_dynamics_v5.py` — the mission runner (imports the modules below via

@@ -15,6 +15,8 @@ ThermoNav's decision-maker is an 18-spin Ising model (6 directions × 3 steps of
 
 **Claim label: Z1-legal formulation, validated in simulation.** This has not been executed on Z1 silicon and is not a validated aircraft — it is software-in-the-loop simulation of a custom navigation stack. Every number in the docs carries its provenance (measured / calculated / assumed).
 
+> **Specular caveat (2026-10-12):** The simulation mission-success and map-fidelity claims in this document are **DIFFUSE-SENSING ONLY**. Under a specular-reflection sensor model (research Phase 3(b), RT-verified), long-route missions fail by map erasure at specular fractions ≥ ~0.1 of wall voxels with 50% engagement, via lost returns carving real structure free — an interaction with the stack's no-return-carves-free inverse model. Full record: research repo `slow-drone/dynamics_sim/SPECULAR.md` (branch `muse/roadmap-specular-2026-10-11`) and `SPECULAR_RT.md` (branch `muse/roadmap-specularrt-2026-10-11`). No numbers in this document were changed by this annotation.
+
 ## Layout
 
 - `s2_theta/` — the trained kernel: `s2_theta_v3.npz` (the 123 params, shipped default — v2 + vacancy hardening), `s2_theta_v2.npz` retained as fallback/baseline, human-readable `params.txt`, training scripts (`train_s2_theta_v2.py`), drop-in agent (`s2_learned.py`, defaults to v3), evaluation + generalization benchmark (`eval_v2.py`, `bench_generalization.py`), training data (`s2_data*.npz`, manifest in `CHECKPOINTS.md`), and full docs (`S2_THETA.md`, `GENERALIZATION.md` — including the honest failure log).
