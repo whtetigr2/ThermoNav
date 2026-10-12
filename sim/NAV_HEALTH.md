@@ -979,3 +979,74 @@ forgiveness — with three caveats. Resolved here:
   13 rows** (commit and note columns included) from a clean
   clone at `4e73601` (verdict PASS, scripted UNTRUSTED 194 /
   gated 16, 0 collisions).
+
+## 8. ThermoNav graduation record (2026-10-11)
+
+**Port:** code at ThermoNav commit `f43754b` (nav rows merged into
+`sim/escalation.py` preserving DISARM + link + battery wiring, decider
+kernel byte-identical; mission-loop report generator + checkpoint
+wiring in `sim/mission_dynamics_v5.py`). Source: thermo-work branch
+`muse/roadmap-navhealth-2026-10-11` @ `7828341`. Red-team round 5:
+**PASS WITH CAVEATS** (documentation-only); C2 ruled an acceptable
+disclosed limit (§2(iv)/§6) — carried, not re-opened.
+
+**Checkpoint wiring (the battery graduation's recorded follow-up —
+done):** `resolve_nav_trustworthy` feeds `BatterySafetyController`
+from the real monitor by default (active whenever the battery safety
+layer is on and no scripted override is supplied, or when
+`cfg["nav_health"]` is set); checkpoint semantics unchanged — a
+position recorded while `pose_trustworthy` was True, refreshed at
+1 Hz, frozen on trust loss. Evidence (`test_nav_checkpoint.py`):
+nominal battery-safety flight with NO override and NO nav cfg —
+monitor on by default, HEALTHY throughout, checkpoint refreshed in
+flight (22.59,23.95,8.50 vs takeoff base 26.50,8.50,8.50); the same
+flight with the estimator report frozen from step 5 — UNTRUSTED
+(194 scans), outcome max_steps (safe stand-down, no collision), and
+the checkpoint frozen at an early pose (25.51,12.26,8.50). The
+`nav_trustworthy_stub` survives only as the scripted override for
+deterministic RTC constructions (documented in `battery_safety.py`).
+
+**TN-side test/validation numbers (all measured in sim):**
+- `test_nav_health.py` **24/24 PASS**; `test_exec_provenance.py`
+  **7/7 PASS** (shipped TN CSVs verify against TN HEAD ancestry);
+  `test_nav_checkpoint.py` PASS; pre-existing suites unregressed:
+  `test_escalation.py` PASS (decider 128/128, DISARM intact),
+  `test_link_health.py` 25 PASS, `test_battery.py` 14 PASS,
+  `test_battery_safety.py` 12 PASS.
+- Calibration (`run_nav_health_calibration.py`, executed at
+  `f43754b`, provenance-guarded): 576 rows, healthy arms **96/96**
+  zero false flags, **0 non-commit diffs** vs the research issue
+  @ `c06984f`.
+- Battery safety validation re-run on the wired tree: **6/6 gates
+  PASS, 0 collisions**, 356 calibration rows, **0 non-commit/wall
+  diffs** vs the battery graduation record (RTB landed min soc
+  0.0693; whiteout landed_disarmed 0.0675, 67 countdown vetoes; RTC
+  ×2 landed 0.0142 / 0.0134; paired OFF/ON identical). CSVs
+  re-stamped with the executed commit `88a11e9`.
+- Mission validation (`run_nav_health_mission_validation.py`,
+  executed at `88a11e9`, provenance-guarded): **0 collisions in all
+  13 missions; scripted-freeze arm PASS** (UNTRUSTED 194, never RTH,
+  never success). **One paired cell FAILS and is disclosed, not
+  fixed:** paired_clear indoorcd_071 s1 — OFF success, ON max_steps;
+  the nominal feed latches UNTRUSTED at step 44 (156 scans) in
+  ThermoNav, where the research loop's same arm stayed DEGRADED
+  (88 scans, success; re-verified on the research tree during this
+  graduation). Diagnosis: ThermoNav's loop has no jitter controller
+  (the paired-clear cells carry a jitter spec it cannot implement —
+  the known battery-graduation caveat), so the flight profile
+  differs; on 071 the vehicle passes through a commanded-but-blocked
+  episode (issued setpoint ≈1.29 m/s, achieved ≈0.22 m/s for ~2 s)
+  where the lag cover expires and the freeze rule latches **as
+  designed** — the monitor code is byte-identical to the research
+  build and the failure direction is conservative (stand-down via
+  gated LAND, no collision, RTH never emitted). Root cause is the
+  TN loop's missing jitter controller + diverged flight profile,
+  not the port. Also differing, outcomes identical: TN nominal arms
+  show 0 DEGRADED scans on 004/128/185 (research: 11–20, jitter
+  transients TN does not produce), and TN `esc_rth_gated` counts
+  are lower (1–2 vs 15–16) because TN's policy dedups consecutive
+  gate log entries — a logging difference, not a behavior one.
+
+**Claim label:** host-side classical monitor + policy wiring,
+validated in simulation. No TSU/Z1 claim, no silicon, not an
+aircraft.
