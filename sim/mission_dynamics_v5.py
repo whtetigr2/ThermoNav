@@ -502,6 +502,30 @@ def _below_clear(pose, marg, obs_mask, shape, radius=1, logodds=None):
                         logodds=logodds) == 0
 
 
+def _land_hold_update(window_s, hold_start, t_sim, bst):
+    """Option A bounded-hold bookkeeping (Paul, decided 2026-10-12).
+
+    Pure function of the episode state so the rule is unit-testable
+    without a mission. `bst` is the current _below_state verdict
+    (0 clear / 1 unknown / 2 occupied). Returns (hold_start, expired):
+
+    - bst == 0 (known-clear): no episode — (None, False).
+    - First vetoed step of an episode: the episode starts now and is
+      not expired (the window must elapse first).
+    - Later vetoed steps: expired once t_sim - hold_start >= window_s.
+
+    The caller owns the outranking rules: the battery terminal bypass
+    and the soc-keyed battery-critical relaxation resolve the landing
+    themselves, so the call site resets the episode instead of calling
+    this when either applies.
+    """
+    if bst == 0:
+        return None, False
+    if hold_start is None:
+        hold_start = t_sim
+    return hold_start, (t_sim - hold_start) >= window_s
+
+
 def _touchdown_disarm_check(policy, tracker, map_age, cfg, t_sim, log):
     """Final DISARM check at touchdown — the loop's touchdown path.
 
@@ -632,6 +656,22 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
     _SAFETY = None  # created after pick_start_goal (needs base pose)
     if cfg.get("battery_safety") and _BATTERY is None:
         raise ValueError("battery_safety requires cfg['battery']")
+    # Below-clear bounded hold (Option A, Paul decided 2026-10-12):
+    # for NON-battery LAND demands, the below-clear veto may hold for
+    # at most cfg["land_hold_window_s"] seconds of continuous veto,
+    # after which the descent proceeds at creep rate regardless of
+    # the veto. Off unless the cfg key is set — with the key unset the
+    # hold state is never read and behavior is legacy bit-for-bit.
+    # Battery paths are untouched: the countdown terminal bypass and
+    # the soc-keyed unverified relaxation both outrank the hold (see
+    # the LAND call site).
+    _land_hold_window_s = cfg.get("land_hold_window_s")
+    # Unset, 0, or negative = OFF (legacy). A negative window must
+    # not arm instant expiry — red-team catch, 2026-10-12.
+    _land_hold_window_s = float(_land_hold_window_s) \
+        if _land_hold_window_s and float(_land_hold_window_s) > 0 \
+        else None
+    _land_hold_start = None  # t_sim the current veto episode began
     # Nav-health layer (roadmap Phase 1 item 3, graduated 2026-10-11
     # after red-team round 5 PASS WITH CAVEATS): monitor consuming a
     # SIMULATED estimator report stream (see the report builder at the
@@ -966,6 +1006,12 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
         # column below must be known-clear in the current perceived map.
         # Blind descent collided 4/16 in whiteout (measured 2026-10-10).
         # If below is unknown/occupied, degrade to HOVER (hold) — loudly.
+        # Option A: a step that does not demand LAND ends any veto
+        # episode (the window bounds a CONTINUOUS hold, per the
+        # decision brief). Inert unless the window is armed.
+        if _land_hold_window_s is not None \
+                and _esc_action != esc_mod.LAND:
+            _land_hold_start = None
         _land_rate = esc_mod.LAND_DESCENT_RATE
         if _esc_action == esc_mod.LAND and (
                 _ESCALATION is not None or _SAFETY is not None):
@@ -1002,7 +1048,17 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             # critical-battery forced-land case. The veto is
             # therefore relaxed for UNKNOWN below only (descend,
             # logged as esc_batt_land_unverified). KNOWN-OCCUPIED
-            # below still vetoes at any charge.
+            # below still vetoes at any charge under THIS
+            # relaxation: descending into a believed obstacle is
+            # never the least-bad option. Perception-triggered LAND
+            # keeps the strict guard unchanged (energy is not scarce
+            # there; holding is viable). One bounded exception,
+            # Paul's Option A (2026-10-12): if cfg
+            # land_hold_window_s is armed, a continuous veto of
+            # EITHER state lapses after the window and the landing
+            # proceeds at creep rate — see the bounded-hold block
+            # below. The relaxation above is unchanged; the
+            # exception is the hold, not this path.
             # With the safety layer ON, its countdown rule supersedes
             # this soc-keyed relaxation: the veto (unknown OR
             # occupied) may hold throughout the countdown window, and
@@ -1012,15 +1068,47 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
             # legacy relaxation below applies.
             _batt_crit = _BATTERY is not None and _SAFETY is None \
                 and _BATTERY.soc <= batt_mod.CRITICAL_SOC
+            # Option A bounded hold (Paul, decided 2026-10-12): with
+            # the window armed, a continuous veto episode accrues
+            # from its first vetoed step; once it has lasted the
+            # window the veto expires and the landing proceeds at
+            # creep rate (the whole descent — creep buys scan time
+            # on the way down, the terminal profile's flat rate is
+            # the battery case's own exception). The terminal bypass
+            # and the battery-critical relaxation outrank the hold:
+            # episodes neither accrue nor expire under them.
+            _hold_expired = False
+            if _land_hold_window_s is not None:
+                if _land_terminal or (_bst == 1 and _batt_crit):
+                    _land_hold_start = None
+                else:
+                    _was = _land_hold_start
+                    _land_hold_start, _hold_expired = _land_hold_update(
+                        _land_hold_window_s, _land_hold_start, t_sim,
+                        _bst)
+                    if _land_hold_start is not None and _was is None:
+                        log["esc_land_hold_episodes"] = \
+                            log.get("esc_land_hold_episodes", 0) + 1
+                    if _hold_expired:
+                        _land_rate = esc_mod.LAND_CREEP_RATE
+                        log["esc_land_hold_expired_steps"] = log.get(
+                            "esc_land_hold_expired_steps", 0) + 1
+                        log["esc_land_hold_max_s"] = max(
+                            log.get("esc_land_hold_max_s", 0.0),
+                            t_sim - _land_hold_start)
             if _land_terminal:
                 log["esc_batt_terminal_land"] = \
                     log.get("esc_batt_terminal_land", 0) + 1
-            elif _bst == 2 or (_bst == 1 and not _batt_crit):
-                _esc_action = esc_mod.HOVER
-                log["esc_land_vetoed"] = log.get("esc_land_vetoed", 0) + 1
             elif _bst == 1 and _batt_crit:
                 log["esc_batt_land_unverified"] = \
                     log.get("esc_batt_land_unverified", 0) + 1
+            elif _hold_expired:
+                # Veto window served: descend anyway (creep rate set
+                # above). Counted in esc_land_hold_expired_steps.
+                pass
+            elif _bst == 2 or (_bst == 1 and not _batt_crit):
+                _esc_action = esc_mod.HOVER
+                log["esc_land_vetoed"] = log.get("esc_land_vetoed", 0) + 1
 
         # ---- D3: goal-blocked check ----
         # Skipped on a safety return leg: the retargeted goal is a
@@ -1588,6 +1676,12 @@ def run_mission_dynamics(occ, room_id, seed, noise_val, mission_id,
         1 for _, e, _ in _ESCALATION.log if e == "rth_gated_land_in_place") \
         if _ESCALATION is not None else 0
     row["esc_land_vetoed"] = log.get("esc_land_vetoed", 0)
+    row["land_hold_window_s"] = _land_hold_window_s \
+        if _land_hold_window_s is not None else -1
+    row["esc_land_hold_episodes"] = log.get("esc_land_hold_episodes", 0)
+    row["esc_land_hold_expired_steps"] = log.get(
+        "esc_land_hold_expired_steps", 0)
+    row["esc_land_hold_max_s"] = log.get("esc_land_hold_max_s", 0.0)
     row["esc_batt_land_unverified"] = log.get(
         "esc_batt_land_unverified", 0)
     # ---- Battery layer (graduated 2026-10-11) ----
