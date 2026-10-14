@@ -1,0 +1,5 @@
+body-aware occupancy: 577 -> 2051 voxels (X3 r=0.356m, half-h=0.055m)
+agent: LearnedS2Agent, weights=s2_theta_v3.npz, n=18 spins
+start_vox=(8, 8, 12) goal_vox=(26, 16, 12)
+MISSION outcome=ARRIVED steps=29 t=14.5s sampler_backend=torch sampler_calls=29
+CSV: /tmp/mission/s2_mission_telemetry.csv (29 rows)
