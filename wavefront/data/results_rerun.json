@@ -1,0 +1,84 @@
+{
+ "bars": {
+  "bar1_wavefront_geodesic": true,
+  "bar2_maze_reached": [
+   true,
+   true,
+   true
+  ],
+  "bar3_z1_rails": true,
+  "bar4_ablation_j0_kills_routing": true,
+  "bar5_ceilinged": true
+ },
+ "bar1": {
+  "corr": 0.9991180978469811,
+  "reached": true,
+  "steps": 25,
+  "bfs": 25,
+  "wall_s": 0.7130413055419922
+ },
+ "bar4": {
+  "field_std": 0.04283522131518765,
+  "reached": false
+ },
+ "mazes": [
+  {
+   "maze": 0,
+   "reached": true,
+   "steps": 65,
+   "final": [
+    37,
+    20,
+    2
+   ],
+   "wavefront_s": 0.7,
+   "total_s": 3.7,
+   "rails": {
+    "max_abs_h": 6.0,
+    "max_abs_J": 1.2999999523162842,
+    "max_deg": 6,
+    "intra": 0,
+    "n_spins": 31752
+   }
+  },
+  {
+   "maze": 1,
+   "reached": true,
+   "steps": 65,
+   "final": [
+    37,
+    20,
+    2
+   ],
+   "wavefront_s": 0.6,
+   "total_s": 3.2,
+   "rails": {
+    "max_abs_h": 6.0,
+    "max_abs_J": 1.2999999523162842,
+    "max_deg": 6,
+    "intra": 0,
+    "n_spins": 31752
+   }
+  },
+  {
+   "maze": 2,
+   "reached": true,
+   "steps": 83,
+   "final": [
+    37,
+    20,
+    2
+   ],
+   "wavefront_s": 0.6,
+   "total_s": 3.0,
+   "rails": {
+    "max_abs_h": 6.0,
+    "max_abs_J": 1.2999999523162842,
+    "max_deg": 6,
+    "intra": 0,
+    "n_spins": 31752
+   }
+  }
+ ],
+ "wall_s": 11.9
+}
