@@ -45,7 +45,7 @@ The short list; the full, first-class version is [`docs/OPEN_PROBLEMS.md`](docs/
 - **Collision counts are flight-phase only** until a ground-phase counting fix lands — read every "0 collisions" with that scope.
 - **1×1 vertical shafts are unclimbable** by the current move set. Measured, geometric, hard.
 - **Battery draw and wind are unmeasured models.** The safety cascade's logic is validated; its power numbers are calculated, not measured against a real vehicle. The wind estimator is unbuilt in the current stack (a retired prototype's PASS was corrected to a partial on re-test).
-- **Field healing is unmeasured.** Maps are static within a mission; how fast the planner's field re-relaxes when the world changes mid-flight is being measured now — no results yet.
+- **Field healing was, until today, unmeasured.** Maps are static within a mission. The first healing probe has now landed (unreviewed): re-forming a stale field costs ~1× the original formation price, and continued sampling alone never heals a wall in the large maze — details in `docs/OPEN_PROBLEMS.md` §5.
 - **Diffuse sensing only.** Under a specular-reflection sensor model, long routes fail by map erasure at specular fractions ≥ ~0.1 — red-team verified; the full annotation is in `REDTEAM.md`.
 
 ## Quickstart

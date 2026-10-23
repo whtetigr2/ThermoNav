@@ -53,15 +53,28 @@ a hard geometric limit of the move set, measured, not a tuning item.
   charter exists in the research record (seeded wind, scorer-only
   ground truth, leakage tests); no results yet.
 
-## 5. Field healing is unmeasured
+## 5. Field healing: first measurement landed, review pending
 
 The wavefront planner's maps are static within a mission. When the map
 changes mid-flight — a door closes, an obstacle appears — the field
-must re-relax, and **nobody has measured how many sweeps that takes or
-what routes do while the field is wrong**. A field audit + healing
-probe is in flight in the lab now; until it lands, dynamic-world
-claims are limited to the dynamic-object layer's measured envelope,
-which handles movers at the controller/safety level, not by re-planning.
+must re-relax. The lab's first healing measurement landed on
+2026-10-23 and is **UNREVIEWED** as of this writing; treat the numbers
+below as preliminary:
+
+- A stale field misbehaves exactly as feared while it is wrong: it
+  routes through newly added walls and strands at a moved goal.
+- Continued sampling heals a small added wall in the 2D world in
+  ~1 sweep — but in the large 3D maze, a single-cell wall **never**
+  heals by continuation (0 un-flip events in 8,320). Small worlds forgive;
+  big ones don't.
+- Discarding the stale field and re-forming it returns to the honest
+  band at **~1× the cold-formation price** (ratios 0.87–1.09 across the
+  four probe legs). Healing costs what forming costs: no shortcut, no
+  penalty.
+
+Until the red-team review lands, dynamic-world claims remain limited
+to the dynamic-object layer's measured envelope, which handles movers
+at the controller/safety level, not by re-planning.
 
 ## 6. Sensing-model boundary: diffuse only
 
