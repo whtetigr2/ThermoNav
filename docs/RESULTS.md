@@ -9,11 +9,11 @@ from raw artifacts); verdicts include their caveats by design.
 
 | Result | Value | Record |
 |---|---|---|
-| Parameters | 123 (18 biases + 105 couplings), 492 bytes | `s2_theta/S2_THETA.md` |
+| Parameters | 123 (18 biases + 105 couplings), 492 bytes of parameters, plus its fixed wiring | `s2_theta/S2_THETA.md` |
 | Novel-room flights (12 HM3D rooms never in training) | 24/24 success, 0 collisions | `s2_theta/GENERALIZATION.md` |
 | vs engineered teacher, 16 paired clear-air flights | bit-identical outcomes | `REDTEAM.md` |
 | Heavy-fog stress (96 paired flights) | teacher 13/16, learned 11/13 — both fail safe, 0 collisions | `REDTEAM.md` |
-| Hardware legality | degree ≤ 15, max\|h\| = 5.35, max\|J\| = 1.14 (Z1 rails: 16 / 6 / 6) | `s2_theta/S2_THETA.md` |
+| Hardware legality | Within Z1 caps, measured: degree ≤ 15, max\|h\| = 5.35, max\|J\| = 1.14 (caps: 16 / 6 / 6 — the \|h\| cap is [ASSUMED], the \|J\| cap is documented by Extropic; colouring and placement are not claimed in this repository) | `s2_theta/S2_THETA.md` |
 | Reward-driven retraining (REINFORCE, 3 variants) | negative — capability tie at up to 5.5× parameter movement; architecture ceiling, not a training gap | `README.md` §"What we tried" |
 
 ## Wavefront planner

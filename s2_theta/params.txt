@@ -1,5 +1,5 @@
 S2-THETA v2 — trained kernel parameter summary
-File: kernel/s2_theta_v2.npz  |  123 params, 492 bytes
+File: kernel/s2_theta_v2.npz  |  123 params, 492 bytes of parameters, plus its fixed wiring
 Claim: Z1-legal formulation, validated in simulation
 
 Keys: biases, weights, edges, h_eng, w_eng, losses
@@ -26,7 +26,7 @@ Claim: Z1-legal formulation, validated in simulation
 Keys: biases, weights, edges, h_eng, w_eng, losses (+ v3_parent_md5, v3_beta, v3_note)
 biases: shape (18,), range [-5.350, -3.690], max|h|=5.350
 weights: shape (105,), range [-1.138, 0.012], max|J|=1.138
-Z1 rails: max|h|=5.350 (<=6), max|J|=1.138 (<=6), degree=15 (<=16)
+Z1 caps: max|h|=5.350 (<=6, [ASSUMED] cap), max|J|=1.138 (<=6, documented by Extropic), degree=15 (<=16); colouring and placement are not claimed in this repository
 
 Verification: 204/204 decision agreement vs v2 (exact enumeration);
 min t=0-vacancy margin -0.900 -> +1.100; exact gate ALL PASS.

@@ -10,7 +10,8 @@ It learns the S2 decision Ising's static parameters — 18 biases + 105 coupling
 — from expert demonstration, using THRML's official training path
 (`IsingTrainingSpec` + `estimate_kl_grad`).
 
-**Size:** 123 parameters, 492 bytes (fp32). Fits in L1 cache. Paul asked for
+**Size:** 123 parameters, 492 bytes of parameters (fp32), plus its fixed
+wiring (the 105 edges it runs on). Fits in L1 cache. Paul asked for
 "triple digit kilobytes" — this is 0.48 KB.
 
 ## Design (frozen)
@@ -45,16 +46,21 @@ Two inits: warm-start (engineered) and small-random. Kept the better.
 | Metric | Value | Provenance |
 |---|---|---|
 | Params | 123 (18+105) | calculated |
-| Bytes (fp32) | 492 | calculated |
+| Bytes (fp32) | 492 bytes of parameters, plus its fixed wiring | calculated |
 | Max |h| | 1.33 | measured |
 | Max |J| | 1.30 | measured |
 | Max degree | 15 | measured |
-| Z1-legal | YES | measured |
+| Within Z1 caps | YES — degree 15 ≤ 16, \|h\| ≤ 6, \|J\| ≤ 6 | measured |
 | Held-out agreement (learned vs expert) | 39.0% | measured |
 | Teacher self-agreement (noise ceiling) | 51.4% | measured |
 | Pure teacher agreement | 47.3% | measured |
 | Closed-loop flight (clear canonical 8) | 7/8, 0 collisions | measured |
 | Engineered baseline flight | 8/8, 0 collisions | measured |
+
+Caps, stated exactly: the shipped kernel's measured maxima are degree 15,
+max|h| = 5.35, max|J| = 1.14. The |h| ≤ 6 cap is [ASSUMED]; the |J| ≤ 6 cap
+is documented by Extropic. **Colouring and placement are not claimed in
+this repository.**
 
 **Agreement calibration:** The teacher is highly stochastic (51% self-agreement
 with different seeds). The learned model achieves 39% = 76% of the noise
@@ -100,7 +106,7 @@ clear missions (0 calls in test), so the flight test barely exercises it.
 
 1. **THRML training works on a real workload.** `estimate_kl_grad` with vmap'd
    per-sample conditioning trains a 123-param Ising to 76% of the noise ceiling.
-2. **Tiny models can work.** 492 bytes, Z1-legal, flies safely.
+2. **Tiny models can work.** 492 bytes of parameters, plus its fixed wiring; within Z1 caps (see the results table), flies safely.
 3. **The pipeline is honest.** We report the negative (doesn't beat teacher)
    and the identifiability issue.
 
@@ -176,8 +182,8 @@ not architecture.** (Random-init still struggles — see honesty section.)
 | Max \|h\| | 1.33 | 5.35 | 2.39 | measured |
 | Max \|J\| | 1.30 | 1.14 | 0.68 | measured |
 | Max degree | 15 | 15 | 15 | measured |
-| Z1-legal | YES | YES | YES | measured |
-| Params / bytes | 123 / 492 | 123 / 492 | 123 / 492 | calculated |
+| Within Z1 caps (degree ≤ 16, \|h\| ≤ 6 [ASSUMED cap], \|J\| ≤ 6 documented by Extropic; colouring and placement not claimed in this repository) | YES | YES | YES | measured |
+| Params / bytes | 123 / 492 bytes of parameters, plus fixed wiring | 123 / 492 bytes of parameters, plus fixed wiring | 123 / 492 bytes of parameters, plus fixed wiring | calculated |
 
 **Flight gate PASSED:** 8/8 success, zero collisions — matches the engineered
 baseline. (Agreement context: teacher self-agreement 51.4%, pure teacher 47.3%

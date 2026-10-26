@@ -29,7 +29,7 @@ ThermoNav writes navigation onto an Ising substrate of the class Extropic is bui
 
 ## Known successes (measured, red-teamed)
 
-- **The kernel flies.** 24/24 success, 0 collisions in 12 indoor rooms it never saw in training; bit-identical outcomes to its engineered teacher across 16 paired clear-air flights. 123 parameters, 492 bytes, legal on the substrate's rails by construction (degree ≤ 15, |h| ≤ 5.35, |J| ≤ 1.14 against rails of 16 / 6 / 6).
+- **The kernel flies.** 24/24 success, 0 collisions in 12 indoor rooms it never saw in training (collision counts are flight-phase only, and all sensing here is diffuse — see Known pitfalls); bit-identical outcomes to its engineered teacher across 16 paired clear-air flights. 123 parameters, 492 bytes of parameters, plus its fixed wiring; within Z1 caps, measured (degree ≤ 15, |h| ≤ 5.35, |J| ≤ 1.14 against caps of 16 / 6 / 6 — the |h| cap is [ASSUMED], the |J| cap is documented by Extropic); colouring and placement are not claimed in this repository.
 - **The planner's field is the sampler's.** Across three 3D mazes the wavefront field matches true distance at correlation 0.98–0.994; on the 2D headline the raw field — no host smoothing — is 0.9982 of the published 0.9991. Switch the coupling off and the field is noise and routing dies: the dynamics are the computation, and the ablation proves it.
 - **The safety stack is the deepest-tested part.** D5 freshness gate (collision cells → 0 in fog/whiteout + jitter, zero false fires in clear air); escalation decider verified 128/128 against its policy oracle; battery cascade validated over 9 missions, 6/6 gates, 0 collisions; dynamic-object layer took the paired mover sweep from 43/48 collisions to 7/48.
 - **The record survives scrutiny.** Every shipped line passed pre-registered bars and at least one red-team round that re-derived its numbers from raw artifacts; several passed three to five rounds. A capstone review of the wider program audited 397 claims across 12 units.
@@ -43,10 +43,11 @@ The short list; the full, first-class version is [`docs/OPEN_PROBLEMS.md`](docs/
 
 - **Self-location is THE open problem.** The stack consumes pose; it doesn't yet produce it well enough. Ground truth is scoring-only in the current program, earlier GT-fed "successes" are revoked and labeled, and the standard front-end fragments in our simulated worlds (the sim VIO gate is not met).
 - **Collision counts are flight-phase only** until a ground-phase counting fix lands — read every "0 collisions" with that scope.
+- **The record rooms' ground-truth grids carry no floor.** The occupancy grids behind the record missions have no floor layer, so descent and landing prices in this record are simulation-only under that caveat (full note in `REDTEAM.md`, below-clear row).
 - **1×1 vertical shafts are unclimbable** by the current move set. Measured, geometric, hard.
 - **Battery draw and wind are unmeasured models.** The safety cascade's logic is validated; its power numbers are calculated, not measured against a real vehicle. The wind estimator is unbuilt in the current stack (a retired prototype's PASS was corrected to a partial on re-test).
 - **Field healing was, until today, unmeasured.** Maps are static within a mission. The first healing probe has now landed (unreviewed): re-forming a stale field costs ~1× the original formation price, and continued sampling alone never heals a wall in the large maze — details in `docs/OPEN_PROBLEMS.md` §5.
-- **Diffuse sensing only.** Under a specular-reflection sensor model, long routes fail by map erasure at specular fractions ≥ ~0.1 — red-team verified; the full annotation is in `REDTEAM.md`.
+- **Diffuse sensing only.** Under a specular-reflection sensor model, long routes fail by map erasure at specular fractions ≥ ~0.1 — red-team verified; the full record is in `sim/SPECULAR.md` (imported into this repository so the scoping stands alone), and the annotation is in `REDTEAM.md`.
 
 ## Quickstart
 

@@ -10,10 +10,13 @@ thrust-lag, and the safety-fix stack.
 > long-route missions fail by map erasure at specular fractions ≥ ~0.1 of
 > wall voxels with 50% engagement, via lost returns carving real structure
 > free — an interaction with the stack's no-return-carves-free inverse
-> model. Full record: research repo `slow-drone/dynamics_sim/SPECULAR.md`
-> (branch `muse/roadmap-specular-2026-10-11`) and `SPECULAR_RT.md`
-> (branch `muse/roadmap-specularrt-2026-10-11`). No numbers in this
-> document were changed by this annotation.
+> model. Full record: [`SPECULAR.md`](SPECULAR.md) in this directory
+> (imported 2026-10-26 from the research record — `SPECULAR.md`,
+> branch `muse/roadmap-specular-2026-10-11`, and its red team
+> `SPECULAR_RT.md`, branch `muse/roadmap-specularrt-2026-10-11` —
+> with the scoping substance, including the red team's corrected
+> regime floor and the carving-policy condition, ported faithfully).
+> No numbers in this document were changed by this annotation.
 
 ## Entry points (current — use these)
 
@@ -32,6 +35,12 @@ thrust-lag, and the safety-fix stack.
 `mission_dynamics.py` → `v2` → `v2b` → `v3` → `v4` → **`v5` (current)**.
 `curated.py` → `v2` → `v2b` → `v3` → `v4` → **`curated_fixes.py` (current)**.
 `screen12.py` → `v2` → `v2b`. `vehicle.py` → **`vehicle_v3.py` (current)**.
+
+## Scoping record
+
+`SPECULAR.md` — the specular-sensing scoping record imported from the
+research repo (see the caveat above). It bounds every mission-success
+and map-fidelity claim in this suite to diffuse sensing only.
 
 ## Research scripts (not entry points)
 

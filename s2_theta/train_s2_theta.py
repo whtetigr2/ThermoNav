@@ -108,10 +108,15 @@ def main():
                              lr=args.lr, seed=args.seed)
         print(f"[{init}] done in {time.time()-t0:.0f}s", flush=True)
         out[init] = (b, w)
-        np.savez(f's2_theta_{init}.npz', biases=b, weights=w,
+        # The random-init checkpoint is saved as s2_theta_random_init.npz
+        # (renamed 2026-10-26: "random" names the initialization of a
+        # trained model, not an untrained control).
+        fname = ('s2_theta_random_init.npz' if init == 'random'
+                 else f's2_theta_{init}.npz')
+        np.savez(fname, biases=b, weights=w,
                  edges=np.array(eidx), h_eng=b_eng, w_eng=w_eng,
                  losses=np.array(losses))
-    print("saved s2_theta_warm.npz, s2_theta_random.npz")
+    print("saved s2_theta_warm.npz, s2_theta_random_init.npz")
 
 
 if __name__ == '__main__':

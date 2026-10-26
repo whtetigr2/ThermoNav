@@ -23,7 +23,7 @@ couplings), v2 + t=0 field shift (+1.0) for vacancy hardening. Default in `s2_le
 | `s2_theta_teacher.npz` | Engineered teacher params |
 | `s2_theta_frozen.npz` / `train_frozen.py` | Frozen-ablation |
 | `s2_theta_hybrid.npz` | Hybrid variant (ablation) |
-| `s2_theta_random.npz` / `s2_theta_v2_random.npz` | Random inits |
+| `s2_theta_random_init.npz` / `s2_theta_v2_random.npz` | Random inits — named for their random *initialization*: these are trained models, not untrained controls. `s2_theta_random_init.npz` (renamed 2026-10-26 — its previous name invited the wrong reading) is bit-identical to `s2_theta.npz`, the kept round-1 learned params |
 | `s2_theta_warm.npz` / `s2_theta_v2_warm.npz` | Warm-start variants (warm-start hurts — see S2_THETA.md) |
 | `s2_theta_v2_random_pilot.npz` / `s2_theta_v2_warm_pilot.npz` | Pilot checkpoints |
 | `temporal_freeze_mask.npy` | Training artifact |
