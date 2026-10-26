@@ -176,7 +176,7 @@ not architecture.** (Random-init still struggles — see honesty section.)
 
 | Metric | Round 1 | Round 2 (warm) | Round 2 (random) | Provenance |
 |---|---|---|---|---|
-| Held-out agreement (t=0) | 39.0% | **42.8%** | 38.4% | measured |
+| Held-out agreement (t=0) | 39.0% | **42.0%** † | 38.4% | measured |
 | Closed-loop (clear 8) | 7/8, 0 coll | **8/8, 0 coll** | — | measured |
 | Engineered baseline | 8/8, 0 coll | 8/8, 0 coll | — | measured |
 | Max \|h\| | 1.33 | 5.35 | 2.39 | measured |
@@ -185,9 +185,18 @@ not architecture.** (Random-init still struggles — see honesty section.)
 | Within Z1 caps (degree ≤ 16, \|h\| ≤ 6 [ASSUMED cap], \|J\| ≤ 6 documented by Extropic; colouring and placement not claimed in this repository) | YES | YES | YES | measured |
 | Params / bytes | 123 / 492 bytes of parameters, plus fixed wiring | 123 / 492 bytes of parameters, plus fixed wiring | 123 / 492 bytes of parameters, plus fixed wiring | calculated |
 
+> † **Correction (2026-10-26):** the round-2 (warm) held-out agreement in
+> the table above was originally filed as **42.8%** (graduation record).
+> Re-measured 2026-10-26 with the shipped `eval_v2.py` at this commit:
+> **42.0% (168/400 windows)** for `s2_theta_v2.npz` (= `s2_theta_v2_warm.npz`).
+> The 42.8% figure is not reconstructible from the shipped record. The
+> derived sentence below is corrected with it: "the 42.8% is 83% of the
+> noise ceiling" → "the 42.0% is 82% of the noise ceiling" (42.0/51.4).
+> No other figure in this table changed.
+
 **Flight gate PASSED:** 8/8 success, zero collisions — matches the engineered
 baseline. (Agreement context: teacher self-agreement 51.4%, pure teacher 47.3%
-— the 42.8% is 83% of the noise ceiling.)
+— the 42.0% is 82% of the noise ceiling.)
 
 ## Honesty section: what didn't work / caveats
 
