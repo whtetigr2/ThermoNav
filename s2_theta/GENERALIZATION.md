@@ -3,7 +3,8 @@
 **Claim label:** Z1-legal formulation, validated in simulation.
 
 ## Question
-Does the learned S2-θ v2 kernel (123 params, 492 bytes) generalize to room
+Does the learned S2-θ v2 kernel (123 params, 492 bytes of parameters, plus
+its fixed wiring) generalize to room
 geometries it never trained on? The bar, per Paul: *"match the teacher where
 the teacher flies"* — and only where a valid solution exists.
 
@@ -63,7 +64,8 @@ there is no gap to close.
 ## Honest notes
 - The paired flights share identical S2 sampler seeds (mission seed +
   step_count), so the Gibbs noise realizations are identical across the pair.
-  The finding is: under matched stochasticity, the 492-byte learned kernel is
+  The finding is: under matched stochasticity, the learned kernel (492 bytes
+  of parameters, plus its fixed wiring) is
   behaviorally indistinguishable from the engineered teacher on these rooms.
   The parameters genuinely differ (learned max|h|=5.35 vs engineered values) —
   this is parameter compression, not a copy.

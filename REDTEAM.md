@@ -14,10 +14,13 @@ provenance (measured / calculated / assumed).
 > long-route missions fail by map erasure at specular fractions ≥ ~0.1 of
 > wall voxels with 50% engagement, via lost returns carving real structure
 > free — an interaction with the stack's no-return-carves-free inverse
-> model. Full record: research repo `slow-drone/dynamics_sim/SPECULAR.md`
-> (branch `muse/roadmap-specular-2026-10-11`) and `SPECULAR_RT.md`
-> (branch `muse/roadmap-specularrt-2026-10-11`). No numbers in this
-> document were changed by this annotation.
+> model. Full record: [`sim/SPECULAR.md`](sim/SPECULAR.md) in this
+> repository (imported 2026-10-26 from the research record —
+> `SPECULAR.md`, branch `muse/roadmap-specular-2026-10-11`, and its
+> red team `SPECULAR_RT.md`, branch `muse/roadmap-specularrt-2026-10-11`
+> — with the scoping substance, including the red team's corrected
+> regime floor and the carving-policy condition, ported faithfully).
+> No numbers in this document were changed by this annotation.
 
 ---
 
@@ -26,6 +29,7 @@ provenance (measured / calculated / assumed).
 | Line | Verdict | Key numbers |
 |---|---|---|
 | S2-θ v2 kernel | **SHIPS** | 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14 [measured]. Tight geometry 16/16, noise 0.30 16/16, heavy fog 11/13 (fails safe) — 96 paired flights [measured] |
+| S2-θ v3 kernel (shipped default) | **SHIPS** | v2 + uniform t=0 field shift (+1.0) for vacancy hardening; the default loaded by `s2_learned.py`. Same measured caps as v2: 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14. 204/204 decision agreement vs v2 (exact enumeration); min t=0-vacancy margin −0.900 → +1.100; MD5 `e67aaed07c7492f1f2239deecfd1c6cb`. Evidence as shipped in this repository: the `v3_note` field inside `s2_theta/s2_theta_v3.npz`, restated in `s2_theta/S2_THETA.md` (round-2 files section), `s2_theta/params.txt`, and `s2_theta/flight_test_v3.py`. **No shipped script recomputes the 204/204 figure** — it is carried as a documented record, not a re-derived one. Win is fault tolerance, not better flight. Known tradeoffs (red-teamed): more decisive on marginal inputs; one-hot margin thins 2.91 → 0.91. |
 | Deterministic argmax readout | **SHIPS** | 22/22 vs stochastic 0/9 paired [measured] — [`MULTIMODAL.md`](redteam/MULTIMODAL.md) |
 | D5 freshness gate (FIX 4) | **SHIPS** | Fog+jitter collision cell 0 collisions (was 1); whiteout+jitter 0 (was 2); 28 clear-air missions zero false fires [measured] — [`FRESHNESS_GATE.md`](redteam/FRESHNESS_GATE.md) |
 | Escalation ladder (Option A, industry mirror) | **SHIPS** | warn → hold → RTH → land → disarm; hold-first + most-severe-wins [design]. 12-spin Z1-legal decider (max\|h\|=4.0, max\|J\|=1.0, degree 2), 128/128 vs policy oracle [measured]. RTH gated on pose trust (gate closed → land-in-place, logged) [design + measured estimator gap]. Landing guard (replaced in the battery graduation with the evidence-keyed three-state version): LAND only if the below-column is known-clear — floor layer counts only with hit support beyond the boundary prior — else hover, with a creep final approach for unverified descents [measured: blind land collided 4/16 pre-guard, 0 post-guard]. Battery + link + nav-health triggers modeled (graduated 2026-10-11 — see their rows); no slot remains stubbed when its inputs are supplied. Claim: "Z1-legal formulation, validated in simulation" (decider); host-side classical (policy/wiring). |

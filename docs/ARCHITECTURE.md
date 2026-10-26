@@ -54,7 +54,8 @@ machinery — not the distance field itself.
 ### S2-θ flight controller (`s2_theta/`)
 
 An 18-spin Ising kernel — 6 move directions × 3 steps of lookahead,
-123 fitted parameters total (18 biases + 105 couplings), 492 bytes —
+123 fitted parameters total (18 biases + 105 couplings), 492 bytes of
+parameters, plus its fixed wiring —
 that picks each move by sampling. The parameters were fitted by
 imitation (behavior cloning of an engineered teacher via contrastive
 KL-gradient estimation in THRML); training is host-side, the fitted
