@@ -69,7 +69,11 @@ there is no gap to close.
   behaviorally indistinguishable from the engineered teacher on these rooms.
   The parameters genuinely differ (learned max|h|=5.35 vs engineered values) —
   this is parameter compression, not a copy.
-- Single-decision agreement on held-out rooms was 42.8% (round 2), yet
+- Single-decision agreement on held-out rooms was 42.0% (round 2;
+  corrected 2026-10-26 — originally filed as 42.8% in the graduation
+  record; re-measured with the shipped `eval_v2.py` at this commit =
+  42.0%, 168/400 windows; the 42.8% figure is not reconstructible from
+  the shipped record), yet
   closed-loop behavior is identical here: the disagreements live in
   low-stakes states that don't change flight outcomes. Closed-loop is the
   load-bearing metric; agreement is diagnostic.
