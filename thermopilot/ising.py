@@ -84,10 +84,55 @@ def max_abs_J(J):
     return float(np.abs(J).max())
 
 
+def two_colourable(J, tol=1e-12):
+    """True iff the support graph of J (nonzero couplings) is bipartite.
+
+    Parity BFS: colour each spin by BFS-depth parity; an edge joining two
+    spins of the same colour (or a self-loop) makes the graph
+    non-bipartite.
+    """
+    J = np.asarray(J)
+    n = J.shape[0]
+    colour = np.full(n, -1, dtype=int)
+    for start in range(n):
+        if colour[start] != -1:
+            continue
+        colour[start] = 0
+        stack = [start]
+        while stack:
+            u = stack.pop()
+            for v in np.nonzero(np.abs(J[u]) > tol)[0]:
+                if v == u:
+                    return False
+                if colour[v] == -1:
+                    colour[v] = colour[u] ^ 1
+                    stack.append(v)
+                elif colour[v] == colour[u]:
+                    return False
+    return True
+
+
 def z1_check(h, J, name=""):
-    """Check against Z1 constraints. Returns dict."""
+    """Screen (h, J) against the Z1 working caps. Returns dict.
+
+    This is a SCREEN, not a placement proof: passing is necessary, not
+    sufficient. Degree <= 16 is weaker than the real rule — Z1 edges must
+    be a subset of a fixed stencil, so a graph can pass the degree cap
+    and still not place. The 6.0 caps are likewise working numbers, not
+    datasheet specs: the |J| bound traces to a figure label in
+    arXiv 2608.01615, and the |h| bound is UNSOURCED — no published Z1
+    field cap exists (see the note on S2Agent._Z1_MAX_H in harness.py).
+
+    `two_colourable` is the parity test on the support graph of J: the
+    chip schedules spins in two colour blocks, so a graph that is not
+    bipartite cannot be scheduled on it at all. (Correction 2026-10-28:
+    before this date the screen did not test colourability and reported
+    fits_Z1 True for the shipped S2 kernel, whose graph is 6-chromatic.)
+    """
     d = degree_of(J)
     mh, mJ = max_abs_h(h), max_abs_J(J)
-    ok = (d <= 16) and (mJ <= 6.0) and (mh <= 6.0)
+    tc = two_colourable(J)
+    ok = (d <= 16) and (mJ <= 6.0) and (mh <= 6.0) and tc
     return {"name": name, "degree": d, "max|h|": round(mh, 3),
-            "max|J|": round(mJ, 3), "n_spins": len(h), "fits_Z1": ok}
+            "max|J|": round(mJ, 3), "n_spins": len(h),
+            "two_colourable": bool(tc), "fits_Z1": ok}

@@ -153,8 +153,12 @@ class S1Agent:
 
 
 class S2Agent:
-    # F4 (2026-10-06): Z1 hardware field limit (assumed). The forbidden-move
+    # F4 (2026-10-06): Z1 hardware field limit. The forbidden-move
     # penalty uses the hardware maximum instead of 1e6 (which needed |h|≈500k).
+    # Correction (2026-10-28): this figure is UNSOURCED, not "(assumed)" as
+    # the original F4 note said — no published Z1 field cap exists. 6.0 is
+    # borrowed from the |J|<=6 figure label in arXiv 2608.01615 and kept as
+    # a reasonable working number; do not cite it as a datasheet limit.
     _Z1_MAX_H = 6.0
     _FORBID_PENALTY_H = _Z1_MAX_H  # strongest representable suppression
     """Directional trajectory-probing TSU planner: K actions x T steps.
@@ -295,7 +299,12 @@ class S2Agent:
                     # Old: c += 1e6 → h=-500004, 83,000× over Z1's |h|≤6.
                     # D5 provides the hard safety guarantee at execution; the S2
                     # penalty is for efficiency (don't waste samples on D5-denied
-                    # moves). h=-6.0 gives ~245:1 Boltzmann suppression, sufficient.
+                    # moves). h=-6.0 gives ~1.6e5:1 Boltzmann suppression at
+                    # beta=1 — gibbs_ising has no temperature, so flipping a
+                    # spin against the field costs dE=12 and exp(12)≈1.6e5 —
+                    # sufficient. (Correction 2026-10-28: this comment
+                    # previously said ~245:1; that figure was wrong — 245:1
+                    # would need dE≈5.5, i.e. beta≈0.46 or h≈-2.75.)
                     h[idx] = -self._FORBID_PENALTY_H
         marg, best_s, best_E, _ = gibbs_ising(
             h, self.J, n_sweeps=self.n_sweeps, burn_in=self.n_sweeps//4,
@@ -319,7 +328,14 @@ class S2Agent:
         else:
             i = int(np.argmax(row0))
         dx, dy, dz = self.moves[i]
-        return (pos[0]+dx, pos[1]+dy, pos[2]+dz), {"method": "tsu-s2"}
+        # max_abs_h: visibility for the declared |h| cap (see _Z1_MAX_H).
+        # The dynamic field accumulates unbounded at the ray-cost lowering
+        # above; nothing clips it (clipping to an unsourced cap would
+        # silently distort the cost ordering), so the value is surfaced
+        # per decision instead. tests/test_field_cap_visibility.py tracks
+        # the held-out violation.
+        return (pos[0]+dx, pos[1]+dy, pos[2]+dz), {
+            "method": "tsu-s2", "max_abs_h": float(np.abs(h).max())}
 
 
 def noisy_perception_with_counts(occ, fp=0.05, fn=0.05, seed=1,
