@@ -1,7 +1,27 @@
 # S2-θ: The Smallest Learnable Thermodynamic Decision Kernel
 
-**Claim label:** Z1-legal formulation, validated in simulation.
+**Claim label:** Formulated for Z1-class thermodynamic hardware, within
+measured caps; validated in simulation only.
 (Never silicon, never real aircraft.)
+
+> **Correction (2026-10-28) — two claim corrections apply to this
+> document; the originals are preserved in this note.** (1) *Legality:*
+> earlier filings of this record carried the label "Z1-legal
+> formulation," and the design section below described a "Z1-legal mask
+> … already legal." The shipped kernel's coupling graph was measured in
+> October 2026 (kernel Z1-shape unit, lab research record) to be
+> **6-chromatic** — each 6-direction timestep slice is a complete graph
+> K6 — so no two-colouring of the shipped graph exists, and chip
+> legality is **not established**. What is measured is that the
+> parameters sit within the Z1 caps (degree, |h|, |J|). A mediated
+> two-colour lowering of the minimized kernel core was built and killed
+> on sampler distortion (2026-10-27). Read every "Z1-legal" in the
+> dated record below under this correction. (2) *Trained parameters:*
+> the 2026-10-26 substrate ablation withdrew the claim that the trained
+> parameters themselves are load-bearing; what survives is
+> decision-level only — see `ABLATION.md` in this directory and the
+> correction notes at "What this proves" and at the round-2 headline
+> diagnostic.
 
 ## What this is
 
@@ -16,8 +36,9 @@ wiring (the 105 edges it runs on). Fits in L1 cache. Paul asked for
 
 ## Design (frozen)
 
-**Architecture:** 18-spin Ising (6 directions × 3 timesteps), Z1-legal mask
-from the engineered S2 (max degree 15, |h|≤4.3, |J|≤1.0 — measured, already legal).
+**Architecture:** 18-spin Ising (6 directions × 3 timesteps), mask within
+Z1 caps from the engineered S2 (max degree 15, |h|≤4.3, |J|≤1.0 — measured,
+within caps; wording corrected 2026-10-28 — see the note at the top).
 
 **Visible/latent split:**
 - Visible: t=0's 6 spins, clamped to expert's one-hot action.
@@ -110,6 +131,18 @@ clear missions (0 calls in test), so the flight test barely exercises it.
 3. **The pipeline is honest.** We report the negative (doesn't beat teacher)
    and the identifiability issue.
 
+> **Correction (2026-10-28):** item 1's framing credits the trained
+> parameters with the kernel's performance. The 2026-10-26 substrate
+> ablation (`ABLATION.md`) tested that credit directly: decision
+> agreement separates the trained kernel from destroyed-structure
+> controls (41.25% vs 21.0% best control — B-1 PASS), but the margin
+> metric reversed (B-2 FAIL — controls post higher margins) and the
+> closed-loop gate separated nothing (B-3 FAIL). The trained-parameters
+> claim is **withdrawn as filed**; the surviving claim is
+> decision-level. The training pipeline works and the kernel flies —
+> what training itself earns is narrower than this section originally
+> implied.
+
 ## What remains
 
 - The temporal/latent structure needs a different training signal (or a
@@ -131,7 +164,9 @@ clear missions (0 calls in test), so the flight test barely exercises it.
 
 # Round 2: n-step realized-future supervision (2026-10-08)
 
-**Claim label:** Z1-legal formulation, validated in simulation.
+**Claim label:** Formulated for Z1-class thermodynamic hardware, within
+measured caps; validated in simulation only. (Label corrected
+2026-10-28 — see the correction note at the top of this document.)
 
 ## The diagnosis it tested
 
@@ -173,6 +208,22 @@ expert's actual a_{t+1}, t=2 to its actual a_{t+2}. The latents stop being laten
 
 Warm-init n-step supervision learns the CORRECT temporal sign. **It was data,
 not architecture.** (Random-init still struggles — see honesty section.)
+
+> **Correction (2026-10-28):** the parameter-level reading of this
+> diagnostic — that training recovered the teacher's temporal structure
+> and that the recovery is why the kernel works — does not survive the
+> 2026-10-26 substrate ablation (`ABLATION.md`): controls with the
+> trained structure destroyed match T on the shipped mission gate, and
+> beat it on the margin metric. The sign flip remains a measured fact
+> about the fitted parameters; it no longer carries the claim. What
+> carries weight is decision-level: T's decisions agree with the
+> teacher at 41.25% against 21.0% for the best destroyed-structure
+> control. Honesty note 3 below already pointed this way ("a different
+> object doing a similar job … the flight result is the real
+> validation, not the parameter match"); the ablation is the
+> measurement that settled the question — and it also showed the
+> flight gate itself separates nothing, so decision agreement is the
+> separating evidence.
 
 | Metric | Round 1 | Round 2 (warm) | Round 2 (random) | Provenance |
 |---|---|---|---|---|

@@ -1,6 +1,8 @@
 # S2-θ Generalization Scoreboard
 
-**Claim label:** Z1-legal formulation, validated in simulation.
+**Claim label:** Formulated for Z1-class thermodynamic hardware, within
+measured caps; validated in simulation only. (Label corrected
+2026-10-28 — see the correction note at the top of `S2_THETA.md`.)
 
 ## Question
 Does the learned S2-θ v2 kernel (123 params, 492 bytes of parameters, plus
@@ -80,6 +82,22 @@ there is no gap to close.
 - Scope: clear-air, noise 0.15, rooms from the same HM3D indoor distribution
   as training. Whiteout/heavy generalization not tested (sensor-limited regime;
   honest answer is multi-modal sensing, not more S2 training).
+
+> **Correction (2026-10-28):** two sentences in the notes above are
+> re-scoped by the 2026-10-26 substrate ablation (`ABLATION.md`).
+> (1) "The parameters genuinely differ … this is parameter compression,
+> not a copy" — the parameters do genuinely differ (measured), but
+> parameter-level difference no longer carries a claim: the
+> trained-parameters claim is withdrawn as filed, and what survives is
+> decision-level. (2) "Closed-loop is the load-bearing metric;
+> agreement is diagnostic" — on the shipped canonical-8 gate the
+> ablation measured the opposite separation: every control arm also
+> flew 8/8, so closed loop separated nothing (B-3 FAIL), while
+> decision agreement is the metric that separated the trained kernel
+> from destroyed-structure controls (41.25% vs 21.0% — B-1 PASS). The
+> paired-flight record in this document stands as measured; what it
+> evidences is behavioural equivalence on these rooms under matched
+> stochasticity, not parameter-level credit.
 - Raw rows: `gen_benchmark.csv` (paired scoreboard), `gen_screen.csv`
   (teacher screening incl. extended rooms).
 
