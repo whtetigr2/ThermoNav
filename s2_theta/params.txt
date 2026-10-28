@@ -1,6 +1,6 @@
 S2-THETA v2 — trained kernel parameter summary
 File: kernel/s2_theta_v2.npz  |  123 params, 492 bytes of parameters, plus its fixed wiring
-Claim: Z1-legal formulation, validated in simulation
+Claim: formulated for Z1-class hardware, within measured caps; validated in simulation (label corrected 2026-10-28 — see S2_THETA.md)
 
 Keys: biases, weights, edges, h_eng, w_eng, losses
 biases: shape (18,), range [-5.350, -4.634], max|h|=5.350
@@ -21,7 +21,7 @@ File: kernel/s2_theta_v3.npz  |  123 params
 Parent: s2_theta_v2.npz (MD5 aebdc75b831b2bd48a775faff615759e)
 Change: uniform t=0 bias shift +1.0 (vacancy hardening)
 MD5: e67aaed07c7492f1f2239deecfd1c6cb
-Claim: Z1-legal formulation, validated in simulation
+Claim: formulated for Z1-class hardware, within measured caps; validated in simulation (label corrected 2026-10-28 — see S2_THETA.md)
 
 Keys: biases, weights, edges, h_eng, w_eng, losses (+ v3_parent_md5, v3_beta, v3_note)
 biases: shape (18,), range [-5.350, -3.690], max|h|=5.350
@@ -37,3 +37,10 @@ one-hot vs multi-hot margin thins 2.910 -> 0.910.
 How to use: from kernel.s2_learned import LearnedS2Agent
   agent = LearnedS2Agent()   # loads v3 by default
   agent = LearnedS2Agent(param_file='s2_theta/s2_theta_v2.npz')  # v2 fallback
+
+---
+Note (2026-10-28): parameter-level diagnostics in this file (e.g. the
+temporal-sign check above) are measurements of the fitted values. After
+the 2026-10-26 substrate ablation they carry no claim — the
+trained-parameters claim is withdrawn as filed; decision-level only
+survives. See ABLATION.md in this directory.

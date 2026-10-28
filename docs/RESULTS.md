@@ -12,8 +12,9 @@ from raw artifacts); verdicts include their caveats by design.
 | Parameters | 123 (18 biases + 105 couplings), 492 bytes of parameters, plus its fixed wiring | `s2_theta/S2_THETA.md` |
 | Novel-room flights (12 HM3D rooms never in training) | 24/24 success, 0 collisions | `s2_theta/GENERALIZATION.md` |
 | vs engineered teacher, 16 paired clear-air flights | bit-identical outcomes | `REDTEAM.md` |
+| Substrate ablation of the trained parameters (2026-10-26) | trained-parameters claim **WITHDRAWN as filed** — decision-level only survives: T agreement 41.25% vs best control 21.0% (B-1 PASS); margin separation B-2 FAIL; closed-loop separation B-3 FAIL | `s2_theta/ABLATION.md` |
 | Heavy-fog stress (96 paired flights) | teacher 13/16, learned 11/13 — both fail safe, 0 collisions | `REDTEAM.md` |
-| Hardware legality | Within Z1 caps, measured: degree ≤ 15, max\|h\| = 5.35, max\|J\| = 1.14 (caps: 16 / 6 / 6 — the \|h\| cap is [ASSUMED], the \|J\| cap is documented by Extropic; colouring and placement are not claimed in this repository) | `s2_theta/S2_THETA.md` |
+| Hardware caps and legality | Within Z1 caps, measured: degree ≤ 15, max\|h\| = 5.35, max\|J\| = 1.14 (caps: 16 / 6 / 6 — the \|h\| cap is [ASSUMED], the \|J\| cap is documented by Extropic). Chip legality is **not established**: the shipped kernel graph is 6-chromatic (measured 2026-10-27), so two-colouring is unavailable as shipped, and a mediated lowering of the minimized core was built and killed on sampler distortion | `s2_theta/S2_THETA.md` (correction of 2026-10-28) |
 | Reward-driven retraining (REINFORCE, 3 variants) | negative — capability tie at up to 5.5× parameter movement; architecture ceiling, not a training gap | `README.md` §"What we tried" |
 
 ## Wavefront planner
@@ -30,7 +31,7 @@ from raw artifacts); verdicts include their caveats by design.
 | Line | Result | Record |
 |---|---|---|
 | D5 freshness gate | fog+jitter and whiteout+jitter collision cells → 0 (from 1 and 2); 28 clear-air missions, 0 false fires | `redteam/FRESHNESS_GATE.md` |
-| Escalation decider | 12-spin Z1-legal kernel, 128/128 vs policy oracle | `sim/docs/ESCALATION_BUILD.md` |
+| Escalation decider | 12-spin decider kernel (degree 2, within Z1 caps), 128/128 vs policy oracle | `sim/docs/ESCALATION_BUILD.md` |
 | Battery safety validation | 9 missions, 6/6 gates, 0 collisions; whiteout terminal landing disarmed at min soc 0.1014 | `sim/BATTERY_MODEL.md` |
 | Link-health layer | 25/25 tests; red-team rounds 1–3 PASS WITH CAVEATS | `sim/LINK_MODEL.md` |
 | Nav-health layer | healthy arms 96/96 zero false flags; one disclosed paired-cell FAIL (documented, conservative direction) | `sim/NAV_HEALTH.md` |

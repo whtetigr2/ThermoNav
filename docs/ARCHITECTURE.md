@@ -62,7 +62,10 @@ KL-gradient estimation in THRML); training is host-side, the fitted
 program is what would be flashed. A deterministic argmax readout ships;
 stochastic action sampling was measured, and killed (0/9 vs 22/22
 paired) — stochasticity lives inside the sampling that forms decisions,
-not in the readout. Full record: `s2_theta/S2_THETA.md`.
+not in the readout. Full record: `s2_theta/S2_THETA.md`. Ablation
+record: `s2_theta/ABLATION.md` — the trained-parameters claim was
+withdrawn as filed in October 2026; decision-level agreement is the
+surviving claim for what the fitting itself earns.
 
 ### Safety machinery (`sim/`)
 
@@ -73,8 +76,8 @@ with the deepest test record:
   *and* the map is stale; closed the one honest fog+jitter collision
   corner in the jitter envelope.
 - **Escalation ladder** — an industry-mirror policy (warn → hold →
-  return-to-home → land → disarm) with a 12-spin Z1-legal decider
-  kernel verified 128/128 against the policy oracle.
+  return-to-home → land → disarm) with a 12-spin decider kernel
+  (degree 2, within Z1 caps) verified 128/128 against the policy oracle.
 - **Battery layer** — a gauge plus a return cascade sized from
   *measured* draw (never the model's predicted draw), with a descent
   reserve and a two-tier touchdown envelope, all stated with its

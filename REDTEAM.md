@@ -4,9 +4,26 @@ We kill our own lines. Every experiment below either shipped or died honestly �
 the negatives are published with the same care as the wins, because a failure
 mode you document is a failure mode you understand.
 
-**Claim label (all): Z1-legal formulation, validated in simulation.**
+**Claim label (all): Formulated for Z1-class thermodynamic hardware,
+within measured caps; validated in simulation.**
 Nothing here ran on Z1 silicon or a real aircraft. Every number carries its
 provenance (measured / calculated / assumed).
+
+> **Correction (2026-10-28) — claim-label correction, original preserved
+> here.** The standing label above previously read "Z1-legal
+> formulation, validated in simulation." That wording is superseded
+> repo-wide: the within-caps measurements (degree, |h|, |J|) stand, but
+> two-colouring and placement were never established — and for the S2
+> kernel the position is now measured, not merely unestablished: the
+> shipped kernel graph is **6-chromatic** (kernel Z1-shape unit,
+> 2026-10-27, lab research record), so it cannot be two-coloured as
+> shipped, and a mediated lowering of its minimized core was built and
+> killed on sampler distortion. Per-line "Claim: Z1-legal formulation…"
+> strings in the dated rows and files of this record are the historical
+> labels of their graduation dates and are read under this correction.
+> Separately, the S2 kernel's trained-parameters claim was withdrawn
+> as filed by the 2026-10-26 substrate ablation — see the notes on the
+> S2-θ rows below and `s2_theta/ABLATION.md`.
 
 > **Specular caveat (2026-10-12):** The simulation mission-success and
 > map-fidelity claims in this record are **DIFFUSE-SENSING ONLY**. Under a
@@ -28,8 +45,8 @@ provenance (measured / calculated / assumed).
 
 | Line | Verdict | Key numbers |
 |---|---|---|
-| S2-θ v2 kernel | **SHIPS** | 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14 [measured]. Tight geometry 16/16, noise 0.30 16/16, heavy fog 11/13 (fails safe) — 96 paired flights [measured] |
-| S2-θ v3 kernel (shipped default) | **SHIPS** | v2 + uniform t=0 field shift (+1.0) for vacancy hardening; the default loaded by `s2_learned.py`. Same measured caps as v2: 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14. 204/204 decision agreement vs v2 (exact enumeration); min t=0-vacancy margin −0.900 → +1.100; MD5 `e67aaed07c7492f1f2239deecfd1c6cb`. Evidence as shipped in this repository: the `v3_note` field inside `s2_theta/s2_theta_v3.npz`, restated in `s2_theta/S2_THETA.md` (round-2 files section), `s2_theta/params.txt`, and `s2_theta/flight_test_v3.py`. **No shipped script recomputes the 204/204 figure** — it is carried as a documented record, not a re-derived one. Win is fault tolerance, not better flight. Known tradeoffs (red-teamed): more decisive on marginal inputs; one-hot margin thins 2.91 → 0.91. |
+| S2-θ v2 kernel | **SHIPS** | 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14 [measured]. Tight geometry 16/16, noise 0.30 16/16, heavy fog 11/13 (fails safe) — 96 paired flights [measured]. **Correction (2026-10-28):** the trained-parameters claim for this kernel was withdrawn as filed by the 2026-10-26 substrate ablation (decision-level only survives) — see `s2_theta/ABLATION.md`. This row's flight record stands as measured. |
+| S2-θ v3 kernel (shipped default) | **SHIPS** | v2 + uniform t=0 field shift (+1.0) for vacancy hardening; the default loaded by `s2_learned.py`. Same measured caps as v2: 123 params, degree 15, max\|h\|=5.35, max\|J\|=1.14. 204/204 decision agreement vs v2 (exact enumeration); min t=0-vacancy margin −0.900 → +1.100; MD5 `e67aaed07c7492f1f2239deecfd1c6cb`. Evidence as shipped in this repository: the `v3_note` field inside `s2_theta/s2_theta_v3.npz`, restated in `s2_theta/S2_THETA.md` (round-2 files section), `s2_theta/params.txt`, and `s2_theta/flight_test_v3.py`. **No shipped script recomputes the 204/204 figure** — it is carried as a documented record, not a re-derived one. Win is fault tolerance, not better flight. Known tradeoffs (red-teamed): more decisive on marginal inputs; one-hot margin thins 2.91 → 0.91. **Correction (2026-10-28):** the margin readings in this row are measurements of record; after the 2026-10-26 ablation they carry no claim weight (B-2 FAIL — destroyed-structure controls post higher decision margins than the trained kernel), and the trained-parameters claim is withdrawn as filed — decision-level only survives. See `s2_theta/ABLATION.md`. |
 | Deterministic argmax readout | **SHIPS** | 22/22 vs stochastic 0/9 paired [measured] — [`MULTIMODAL.md`](redteam/MULTIMODAL.md) |
 | D5 freshness gate (FIX 4) | **SHIPS** | Fog+jitter collision cell 0 collisions (was 1); whiteout+jitter 0 (was 2); 28 clear-air missions zero false fires [measured] — [`FRESHNESS_GATE.md`](redteam/FRESHNESS_GATE.md) |
 | Escalation ladder (Option A, industry mirror) | **SHIPS** | warn → hold → RTH → land → disarm; hold-first + most-severe-wins [design]. 12-spin Z1-legal decider (max\|h\|=4.0, max\|J\|=1.0, degree 2), 128/128 vs policy oracle [measured]. RTH gated on pose trust (gate closed → land-in-place, logged) [design + measured estimator gap]. Landing guard (replaced in the battery graduation with the evidence-keyed three-state version): LAND only if the below-column is known-clear — floor layer counts only with hit support beyond the boundary prior — else hover, with a creep final approach for unverified descents [measured: blind land collided 4/16 pre-guard, 0 post-guard]. Battery + link + nav-health triggers modeled (graduated 2026-10-11 — see their rows); no slot remains stubbed when its inputs are supplied. Claim: "Z1-legal formulation, validated in simulation" (decider); host-side classical (policy/wiring). |
