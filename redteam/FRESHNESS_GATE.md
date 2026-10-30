@@ -24,7 +24,7 @@ corner the sensor is FINE — the tracker was never blind (heavy fog measures
 vis 0.61 / far 0.04, deliberately above the FIX 3 blindness thresholds
 0.50/0.02). The *published* `(marg, obs_mask)` was up to 2 s old. No
 blindness trigger can catch a pipeline-staleness failure. That's the gap
-this gate closes. Full analysis: STALE_MAP_STANDDOWN_DESIGN.md.
+this gate closes; the design is in section 2 below.
 
 ## 2. The gate (LEGO: smallest change that bites)
 

@@ -10,7 +10,8 @@ This record is imported into this repository on 2026-10-28 from the
 lab's research record, so that the claim correction below stands alone
 here — the same pattern as the `sim/SPECULAR.md` import (2026-10-26).
 Source: `RESULTS_KERNEL_ABLATION_BUILD2.md` (thermo-work @ `1105747`),
-executed against charter `PLAN_KERNEL_ABLATION.md` as conformed by
+executed against charter `PLAN_KERNEL_ABLATION.md` (lab research record;
+not present in the archived thermo-work branches) as conformed by
 errata #1–#3; cold results review **PASS** (@ `965bdec`). The runs were
 made from a checkout of this repository at `bd36881`, with every input
 hash-pinned before scoring.
