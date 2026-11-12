@@ -64,6 +64,29 @@ executions, the two easiest sequences; the same pipeline in our
 simulated worlds fragments (tracking losses) and does **not** yet meet
 the sim gate — see `docs/OPEN_PROBLEMS.md`.
 
+## Full-stack flight (Gazebo physics simulation)
+
+Status update, 2026-11-11. The assembled stack — the thermodynamic
+decision program plus a separate classical estimator — flown end to
+end as a complete drone in a Gazebo physics simulation: a different
+simulator from the THRML record above. The flight harness is not in
+this repository; the full record lives in the lab's research record.
+
+| Set | Result |
+|---|---|
+| Graded set closing "School 3" (2026-11-10), 5 hops | 4/5 landed, arrival error 0.43–0.46 m; remaining hop a false arrival at 1.08 m; 0 contacts; 5/5 hops safe |
+| Graded re-test (2026-11-11), 4 fresh sessions | 4/4 centre arrivals, 0 false arrivals, 0 contacts; course position error p95 0.026–0.033 m |
+| Claim-age tail bar (pre-registered, re-test) | **NOT PASSED** as pre-registered; the miss was traced to the instrument counting pre-flight pad time, and under the corrected course-window measure the set passes |
+
+The School 3 miss was traced to two measured causes — sensor claims
+reaching the filter already stale while stamped as current (a
+delivery/timing defect), and an acceleration bias injected in the
+body frame but tracked as a world-frame state — and both fixes were
+built and flown (the re-test above). Scope: simulation only; nothing
+has flown on a physical vehicle, and the estimator's accuracy is not
+evidence about the decision layer — the flight proof stands on the
+decision program flying with borrowed eyes.
+
 ## Sibling demonstration (same substrate discipline, not a drone)
 
 The warehouse-routing program applied the identical method —
